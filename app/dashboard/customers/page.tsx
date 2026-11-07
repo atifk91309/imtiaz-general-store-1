@@ -36,7 +36,8 @@ export default function CustomersPage() {
 
   const fetchAndSet = useCallback(async (searchTerm: string) => {
     try {
-      const res = await fetch(`/api/customers?search=${encodeURIComponent(searchTerm)}`);
+      // ✅ FIX: status=all explicit - taake paid khata gayab na ho, Del dikhe
+      const res = await fetch(`/api/customers?search=${encodeURIComponent(searchTerm)}&status=all`);
       const data = (await res.json()) as { customers?: CustomerApi[] };
       const list: Customer[] = (data.customers?? []).map((c) => ({
         ...c,
@@ -125,15 +126,18 @@ export default function CustomersPage() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ customerId: wusoolId, amount: rnd(Number(amount)) }),
       });
-      if (!res.ok) throw new Error("Wusool failed");
-      setWusoolId(null); setWusoolName(null); setAmount(""); await reload();
+      const data = await res.json().catch(()=>({}));
+      if (!res.ok) throw new Error(data.error || "Wusool failed");
+      setWusoolId(null); setWusoolName(null); setAmount(""); 
+      // ✅ reload ke baad paid wala niche Del ke saath ayega
+      await reload();
     } catch (err: unknown) {
       const msg = err instanceof Error? err.message : "Wusool failed"; alert(msg);
     } finally { setWusoolLoading(false); }
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Delete this Khata entry permanently?")) return;
+    if (!confirm("Imtiaz Store: Delete this Khata permanently? History will be removed.")) return;
     setDeletingId(id);
     try {
       const res = await fetch(`/api/customers/${id}`, { method: "DELETE" });
@@ -154,8 +158,8 @@ export default function CustomersPage() {
     <div className="p-2 sm:p-3 md:p-4 max-w-2xl mx-auto min-h-screen bg-gray-50">
       <div className="bg-white rounded-xl p-3 mb-2 flex justify-between items-center shadow-sm border">
         <div className="min-w-0">
-          <h1 className="font-bold text-[14px] leading-tight truncate">📒 Imtiaz Store Khata</h1>
-          <p className="text-[10px] text-gray-500">{pendingCount} pending • {paidCount} paid • Total customers {customers.length}</p>
+          <h1 className="font-bold text-[14px] leading-tight truncate">📒 Imtiaz General Store - Khata</h1>
+          <p className="text-[10px] text-gray-500">{pendingCount} pending • {paidCount} paid (Del available) • Total {customers.length}</p>
         </div>
         <span className="font-bold text-red-600 text-[13px] whitespace-nowrap ml-2">Rs {fmt(totalUdhar)}</span>
       </div>
@@ -177,16 +181,17 @@ export default function CustomersPage() {
                       <span>{c.name}</span>
                       <span className="text-[9px] text-gray-400 font-normal">#{c._id.slice(-5)}</span>
                       {billsCount > 1 && <span className="bg-blue-100 text-blue-700 text-[8px] px-2 py-0.5 rounded-full">{billsCount} bills</span>}
-                      {c.isPaid && <span className="bg-green-600 text-white text-[8px] px-2 py-0.5 rounded-full">PAID</span>}
+                      {c.isPaid && <span className="bg-green-600 text-white text-[8px] px-2 py-0.5 rounded-full">PAID ✓ All Received</span>}
                     </p>
                     <div className="text-[10px] text-gray-500 leading-3 mt-1 truncate">
                       {c.isPaid? <><div>Last Udhar: {udharDate? new Date(udharDate).toLocaleDateString() : "-"} {udharDate? new Date(udharDate).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""}</div><div className="text-green-700 font-medium">Paid: {wusoolDate? new Date(wusoolDate).toLocaleString() : "-"}</div></> : <div>{udharDate? new Date(udharDate).toLocaleString() : ""} {c.village? `| ${c.village}` : ""} {c.phone? `| ${c.phone}` : ""}</div>}
                     </div>
-                    {c.isPaid? <p className="text-[11px] mt-1"><span className="text-green-700 font-bold">Rs {fmt(c.paidAmount||0)}</span></p> :
+                    {c.isPaid? <p className="text-[11px] mt-1"><span className="text-green-700 font-bold">Rs {fmt(c.paidAmount||0)} Paid</span> <span className="text-[10px] text-gray-500">- Del available</span></p> :
                       <p className="text-[11px] mt-1"><span className="text-red-600 font-bold">Rs {fmt(c.totalUdhar)}</span> <span className="text-gray-300">|</span> <span className="text-[10px]">Bill Rs {fmt(c.totalBusiness)}</span>{c.paidAmount? <span className="text-[10px] text-green-600 ml-1">Paid Rs {fmt(c.paidAmount)}</span> : null}</p>}
                   </div>
                   <div className="flex shrink-0 gap-1">
-                    {c.isPaid? <button onClick={() => handleDelete(c._id)} disabled={isDeleting} className={`px-3 py-1.5 rounded-lg text-[11px] font-bold ${isDeleting? "bg-gray-100 text-gray-400" : "bg-gray-100 text-gray-600"}`}>{isDeleting? "..." : "Del"}</button> :
+                    {/* ✅ FINAL LOGIC: Wusool jab pending, Del jab fully paid */}
+                    {c.isPaid? <button onClick={() => handleDelete(c._id)} disabled={isDeleting} className={`px-3 py-1.5 rounded-lg text-[11px] font-bold ${isDeleting? "bg-gray-100 text-gray-400" : "bg-red-600 text-white"}`}>{isDeleting? "..." : "Del"}</button> :
                       <button onClick={() => { setWusoolId(c._id); setWusoolName(c.name); setAmount(String(rnd(c.totalUdhar))); }} className="bg-black text-white px-3.5 py-1.5 rounded-lg text-[11px] font-bold">Wusool</button>}
                   </div>
                 </div>
@@ -202,7 +207,7 @@ export default function CustomersPage() {
                     {c.wusoolHistory && c.wusoolHistory.length > 0? (
                       <div className="space-y-1">{c.wusoolHistory.slice().reverse().map((w, idx) => (
                           <div key={`${w.date}-${idx}`} className="flex justify-between bg-gray-50 rounded-lg px-2 py-1.5 text-[11px]"><span className="font-bold text-green-700">Rs {fmt(w.amount)}</span><span className="text-[10px] text-gray-500">{new Date(w.date).toLocaleString()}</span></div>))}
-                        <div className="flex justify-between font-bold text-[11px] pt-1 border-t"><span>Total Paid: Rs {fmt(c.paidAmount||0)}</span><span className="text-red-600">Remaining: Rs {fmt(c.totalUdhar)}</span></div></div>
+                        <div className="flex justify-between font-bold text-[11px] pt-1 border-t"><span>Total Paid: Rs {fmt(c.paidAmount||0)}</span><span className={c.isPaid? "text-green-600" : "text-red-600"}>{c.isPaid? "All Clear - Rs 0" : `Remaining: Rs ${fmt(c.totalUdhar)}`}</span></div></div>
                     ) : <p className="text-[10px] text-gray-400">No wusool yet. Total: Rs {fmt(c.totalBusiness)}</p>}
                   </div>
                 )}
@@ -213,7 +218,7 @@ export default function CustomersPage() {
       {wusoolId && (
         <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center p-2 z-50">
           <div className="bg-white rounded-t-2xl sm:rounded-2xl p-4 w-full max-w-sm">
-            <h2 className="font-bold text-[13px] mb-2">Wusool from {wusoolName}</h2>
+            <h2 className="font-bold text-[13px] mb-2">Wusool from {wusoolName} - Imtiaz Store</h2>
             <p className="text-[10px] text-gray-500 mb-2">#{wusoolId.slice(-6)} • {new Date().toLocaleString()}</p>
             <input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="Amount" className="w-full p-2.5 border rounded-xl mb-3 outline-none text-[13px] focus:ring-2 focus:ring-black"/>
             <div className="flex gap-2"><button onClick={() => { setWusoolId(null); setWusoolName(null); }} disabled={wusoolLoading} className="flex-1 p-2.5 bg-gray-100 rounded-xl text-[13px]">Cancel</button><button onClick={handleWusool} disabled={wusoolLoading} className="flex-1 p-2.5 bg-black text-white rounded-xl font-bold text-[13px]">{wusoolLoading? "..." : "Receive"}</button></div>

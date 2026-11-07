@@ -34,13 +34,23 @@ export async function POST(req: NextRequest) {
     
     let customer = null;
     if (body.customerId && Types.ObjectId.isValid(body.customerId)) {
-      customer = await Customer.findOne({ _id: body.customerId, userId, isPaid: false });
+      // ✅ CHANGE: isPaid filter hata diya - pending hi milega but paid ko bhi handle kar sake
+      customer = await Customer.findOne({ _id: body.customerId, userId });
     } else {
       const normalized = body.customerName!.trim().toLowerCase();
-      customer = await Customer.findOne({ normalizedName: normalized, userId, isPaid: false });
+      // ✅ Last pending khata lo, paid wala nahi
+      customer = await Customer.findOne({ normalizedName: normalized, userId, isPaid: false }).sort({ createdAt: -1 });
+      // agar pending na mile to last wala paid bhi check karo (galat wusool rokne ke liye)
+      if (!customer) {
+        const lastCustomer = await Customer.findOne({ normalizedName: normalized, userId }).sort({ createdAt: -1 });
+        if (lastCustomer && lastCustomer.isPaid) {
+          return NextResponse.json({ error: "Khata already fully paid - Del option available" }, { status: 400 });
+        }
+      }
     }
 
-    if (!customer) return NextResponse.json({ error: "Khata not found or already paid" }, { status: 404 });
+    if (!customer) return NextResponse.json({ error: "Khata not found" }, { status: 404 });
+    if (customer.isPaid) return NextResponse.json({ error: "Khata already paid - use Del to remove" }, { status: 400 });
 
     const historyEntry = {
       amount,
@@ -51,16 +61,15 @@ export async function POST(req: NextRequest) {
     const newUdhar = rnd(customer.totalUdhar - amount);
 
     if (newUdhar <= 0.01) {
-      // Fully paid
+      // ✅ FULLY PAID - DELETE NAHI KARNA, SIRF PAID MARK KARNA
       customer.totalUdhar = 0;
-      customer.isPaid = true;
+      customer.isPaid = true; // ab paid list me jayega, hide nahi hoga
       customer.paidAmount = customer.totalBusiness;
       customer.paidAt = new Date();
       customer.lastWusoolDate = new Date();
       customer.wusoolHistory.push(historyEntry);
       await customer.save();
 
-      // Mark all linked sales as paid
       if (customer.saleIds?.length) {
         await Sale.updateMany(
           { _id: { $in: customer.saleIds }, userId },
@@ -73,7 +82,8 @@ export async function POST(req: NextRequest) {
         fullyPaid: true, 
         extra: rnd(Math.abs(newUdhar)),
         customer,
-        wusool: historyEntry 
+        wusool: historyEntry,
+        message: "All udhar received - Khata Paid, Del option now available"
       });
     } else {
       // Partial wusool

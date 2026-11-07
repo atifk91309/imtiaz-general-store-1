@@ -27,16 +27,18 @@ export async function GET(req: NextRequest) {
 
     const sp = req.nextUrl.searchParams;
     const search = sp.get("search")?.trim() || "";
-    const status = sp.get("status") || "pending";
+    // ✅ FIX: default pending se all kiya - taake paid khata gayab na ho, history rahe
+    const status = sp.get("status") || "all"; 
     const userId = new Types.ObjectId(session.user.id);
 
-    // Build query without FilterQuery
     if (search) {
       const regex = { $regex: search, $options: "i" };
       const normRegex = { $regex: search.toLowerCase(), $options: "i" };
       const query = status === "all"
         ? { userId, $or: [{ name: regex }, { normalizedName: normRegex }, { phone: regex }, { village: regex }] }
         : { userId, isPaid: status === "paid", $or: [{ name: regex }, { normalizedName: normRegex }, { phone: regex }, { village: regex }] };
+      
+      // ✅ pending upar, paid (Del wala) niche
       const customers = await Customer.find(query).sort({ isPaid: 1, lastUdharDate: -1 }).lean();
       const rounded = customers.map((c) => ({
         ...c,
