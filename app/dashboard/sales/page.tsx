@@ -6,7 +6,6 @@ import { getOfflineUser } from "@/lib/offline-auth";
 
 type BluetoothDevice = { name?: string; gatt?: { connect: () => Promise<void> } };
 type BluetoothNavigator = { bluetooth?: { requestDevice: (options: Record<string, unknown>) => Promise<BluetoothDevice> } };
-
 type Category = "mobile_accessories" | "manyari" | "cosmetics" | "other";
 type Product = { _id: string; name: string; category: Category; buyPrice: number; buyPriceAvg: number; sellPrice: number; stock: number; stockMode: "limited"|"unlimited"; };
 type Sale = { _id: string; productId: string; productName: string; category: Category; quantity: number; sellPrice: number; total: number; profit: number; createdAt: string; customerName?: string; status?: string; paymentType?: string; };
@@ -88,78 +87,75 @@ export default function SalesPage(){
   },[]);
 
   const printBill = useCallback(async (cartItems: CartItem[], total: number, customer: string) => {
-  const today = new Date().toLocaleDateString('en-PK');
-  const serial = Date.now().toString().slice(-5);
-
-  const rows = cartItems.map(i => `
-    <tr><td>${i.qty}</td><td style="text-align:right">${i.name}</td><td>${i.price}</td><td>${i.total}</td></tr>
-  `).join('');
-
-  // ✅ FIX: 20 nahi, sirf 12 tak fill karo taake 1 page pe fit ho
-  const MAX_ROWS = 12;
-  const emptyRows = Math.max(0, MAX_ROWS - cartItems.length);
-  const emptyHtml = Array(emptyRows).fill('<tr><td>&nbsp;</td><td></td><td></td><td></td></tr>').join('');
-
-  const billHtml = `
-  <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Nastaliq+Urdu:wght@400;700&display=swap" rel="stylesheet">
-  <style>
-    @page { size: A4; margin: 8mm; }
-    * { box-sizing: border-box; }
-    html, body { margin:0; padding:0; height: auto; }
-    body { font-family: 'Noto Nastaliq Urdu', serif; direction: rtl; font-size:12px; }
-    .page { page-break-after: avoid; page-break-inside: avoid; }
-    .header { text-align:center; border-bottom: 2px solid #1e3a8a; padding-bottom:4px; }
-    .header h1 { font-size: 28px; color: #1e3a8a; margin:0; line-height:1 }
-    .phones { font-family: monospace; font-size:10px; color:#1e3a8a; display:flex; justify-content:space-between; direction:ltr; }
-    .sub { font-size:9px; margin:2px 0; line-height:1.2 }
-    .blue-box { background:#1e3a8a; color:white; font-size:8px; padding:2px 8px; border-radius:10px; display:inline-block; }
-    .info { display:flex; justify-content:space-between; margin:6px 0; font-size:12px; }
-    .info span { border-bottom:1px solid #000; min-width:120px; display:inline-block; }
-    table { width:100%; border-collapse:collapse; margin-top:4px; }
-    th { background: #f0f4ff; border:1.5px solid #1e3a8a; padding:4px; font-size:12px; color:#1e3a8a }
-    td { border:1px solid #1e3a8a; padding:3px; font-size:11px; text-align:center; height:20px }
-    td:nth-child(2) { text-align:right }
-    tfoot td { font-weight:bold; background:#eef2ff }
-    .footer { margin-top:8px; display:flex; justify-content:space-between; font-size:10px; page-break-inside: avoid; }
-  </style>
-  </head><body><div class="page">
-    <div class="header">
-      <div class="phones"><span>0343-3518722 :جنید<br>0343-8989277</span><h1>امتیاز جنرل سٹور</h1></div>
-      <div class="sub">ہمارے ہاں ایزی لوڈ، ایزی پیسہ، جاز کیش اور تمام نیٹ ورک کے کارڈز دستیاب ہیں۔</div>
-      <div class="blue-box">مین بازار شیل پمپ نزد اسلامیہ کالج روڈ، شیوہ اڈہ</div>
-    </div>
-    <div class="info"><div>سیریل نمبر: <span>${serial}</span></div><div>تاریخ: <span>${today}</span></div></div>
-    <div class="info"><div>نام: <span>${customer}</span></div><div></div></div>
-    <table>
-      <thead><tr><th style="width:12%">تعداد</th><th style="width:48%">تفصیل</th><th style="width:20%">نرخ</th><th style="width:20%">روپے</th></tr></thead>
-      <tbody>${rows}${emptyHtml}</tbody>
-      <tfoot><tr><td></td><td>ٹوٹل</td><td></td><td>Rs. ${total}</td></tr></tfoot>
-    </table>
-    <div class="footer"><div>دستخط: ___________</div><div style="font-family:monospace; direction:ltr">قاسم پریس شیوہ اڈہ 5341609-0336</div></div>
-  </div></body></html>
-  `;
-
-  const old = document.getElementById('imtiaz-print-iframe');
-  if (old) old.remove();
-  const iframe = document.createElement('iframe');
-  iframe.id = 'imtiaz-print-iframe';
-  iframe.style.position = 'fixed'; iframe.style.width = '0'; iframe.style.height = '0'; iframe.style.border = '0';
-  document.body.appendChild(iframe);
-  const doc = iframe.contentWindow?.document;
-  if (!doc) return;
-  doc.open(); doc.write(billHtml); doc.close();
-  setTimeout(()=>{ iframe.contentWindow?.print(); }, 400);
-  setTimeout(()=>{ iframe.remove(); }, 12000);
-}, []);
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' }).replace(/ /g, '-');
+    const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+    const invNo = `INV-${Date.now().toString().slice(-6)}`;
+    const itemCount = cartItems.length;
+    const rows = cartItems.map(i => `<tr><td style="text-align:left; padding-left:6px">${i.name}</td><td>${i.qty}</td><td>${i.price.toFixed(2)}</td><td>${i.total.toFixed(2)}</td></tr>`).join('');
+    const billHtml = `
+    <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+    <style>
+      @page { size: 80mm auto; margin: 2mm; }
+      body { font-family: 'Courier New', monospace; margin:0; padding:4mm; width: 72mm; font-size: 11px; color: #000; }
+      .center { text-align:center } .bold { font-weight:bold }
+      .store-name { font-size:18px; font-weight:900; margin:4px 0 0 0 }
+      .address { font-size:10px; line-height:1.2; margin:2px 0 }
+      .phones { font-size:10px; font-weight:bold; margin:2px 0 }
+      .divider { border-top:1px solid #000; margin:4px 0 }
+      .info { font-size:10px; text-align:left; line-height:1.4 }
+      table { width:100%; border-collapse:collapse; margin-top:4px; }
+      th { border-top:1px solid #000; border-bottom:1px solid #000; padding:3px 2px; font-size:10px; text-align:center }
+      td { padding:3px 2px; font-size:10px; text-align:center; border-bottom:1px dotted #ccc }
+      td:first-child { text-align:left }
+      .totals { width:100%; margin-top:4px; border-top:1px solid #000; }
+      .totals td { border:none; padding:2px; font-size:11px; text-align:left }
+      .totals td:last-child { text-align:right; font-weight:bold }
+      .footer { text-align:center; font-size:9px; margin-top:8px; line-height:1.3; border-top:1px solid #000; padding-top:4px }
+    </style>
+    </head><body>
+      <div class="center">
+        <div class="store-name">Imtiaz General Store</div>
+        <div class="address">Main Ghulam Wheel Chowk Parmoli Road<br>Sultan Market Shewa</div>
+        <div class="phones">0343-3518722, 0343-8989277, Junaid</div>
+      </div>
+      <div class="divider"></div>
+      <div class="info">
+        <div>Inv no: ${invNo} &nbsp; ${dateStr} &nbsp; ${timeStr}</div>
+        <div class="bold" style="text-transform:uppercase">${customer.toUpperCase()}</div>
+      </div>
+      <table>
+        <thead><tr><th style="text-align:left; width:48%">Item Description</th><th style="width:12%">Qty</th><th style="width:18%">Rate</th><th style="width:22%">Amount</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <table class="totals">
+        <tr><td>No of Items: ${itemCount}</td><td>Amount:</td><td>${total.toFixed(2)}</td></tr>
+        <tr><td>Note</td><td>Discount:</td><td>0.00</td></tr>
+        <tr><td></td><td>Recieved:</td><td>${total.toFixed(2)}</td></tr>
+        <tr><td></td><td>Balance:</td><td>0.00</td></tr>
+      </table>
+      <div class="info" style="margin-top:6px; border-top:1px solid #000; padding-top:4px"><div>User: JUNAID KHAN</div></div>
+      <div class="footer">Thanks for Business with us<br>Please check your items before leaving counter<br>Please bring your receipt for refund / exchange</div>
+    </body></html>
+    `;
+    const old = document.getElementById('imtiaz-print-iframe');
+    if (old) old.remove();
+    const iframe = document.createElement('iframe');
+    iframe.id = 'imtiaz-print-iframe';
+    iframe.style.position = 'fixed'; iframe.style.width = '0'; iframe.style.height = '0'; iframe.style.border = '0';
+    iframe.style.right = '0'; iframe.style.bottom = '0';
+    document.body.appendChild(iframe);
+    const doc = iframe.contentWindow?.document;
+    if (!doc) return;
+    doc.open(); doc.write(billHtml); doc.close();
+    setTimeout(()=>{ iframe.contentWindow?.print(); }, 400);
+    setTimeout(()=>{ iframe.remove(); }, 12000);
+  }, []);
 
   const connectPrinter = useCallback(async () => {
     try {
       const nav = window.navigator as unknown as BluetoothNavigator;
-      if (!nav.bluetooth) {
-        alert("Bluetooth not supported in this browser. Use Chrome on Android for BT printing.");
-        return;
-      }
+      if (!nav.bluetooth) { alert("Bluetooth not supported in this browser. Use Chrome on Android for BT printing."); return; }
       const device = await nav.bluetooth.requestDevice({
         acceptAllDevices: true,
         optionalServices: ['battery_service', '000018f0-0000-1000-8000-00805f9b34fb', '49535343-fe7d-4ae5-8fa9-9fafd205e455', '0000ff00-0000-1000-8000-00805f9b34fb']
@@ -232,7 +228,8 @@ export default function SalesPage(){
       }
     }catch{} finally{ setLoadingSales(false); }
   },[]);
-// eslint-disable-next-line react-hooks/set-state-in-effect
+
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(()=>{ void loadSales(filter,page); void refreshCounts(); void syncPendingSales(); },[filter,page,loadSales,refreshCounts,syncPendingSales]);
 
   const total=sales.reduce((a,b)=>a+b.total,0);
@@ -291,7 +288,6 @@ export default function SalesPage(){
     setSales((prev)=>[...newSales, ...prev]);
     await printBill(copy, cartTotal, finalCustomer);
     setCart([]); setCustomPrices({});
-
     for(let i=0;i<copy.length;i++){
       const c=copy[i];
       const saleToSave: OfflineSale = { localId: newSales[i]._id, productId: c.productId, productName: c.name, category: c.category, quantity: c.qty, sellPrice: c.price, buyPrice: c.buyPriceAvg, buyPriceAvg: c.buyPriceAvg, total: c.total, profit: newSales[i].profit, customerName: finalCustomer, paymentType: paymentType, status: paymentType==="credit"?"pending":"paid", userId: rawUserId, createdAt: now, synced: 0, };
@@ -352,9 +348,23 @@ export default function SalesPage(){
                     </div>
                     <div className="flex gap-2 mt-2">
                       <div className="flex border rounded-lg overflow-hidden h-8">
-                        <button type="button" onClick={()=>setQtyMap({...qtyMap,[p._id]:Math.max(1,qty-1)})} className="px-2 bg-gray-100" disabled={isOutOfStock}>-</button>
-                        <span className="w-8 flex items-center justify-center text-[12px] font-bold">{qty}</span>
-                        <button type="button" onClick={()=>{ if(p.stockMode==="limited" && qty>=p.stock){ alert(`Only ${p.stock} left`); return; } setQtyMap({...qtyMap,[p._id]:qty+1}); }} className="px-2 bg-gray-100" disabled={isOutOfStock}>+</button>
+                        <button type="button" onClick={()=>setQtyMap({...qtyMap,[p._id]:Math.max(1,qty-1)})} className="px-2 bg-gray-100 font-bold" disabled={isOutOfStock}>-</button>
+                        <input 
+                          type="text" 
+                          inputMode="numeric"
+                          value={qty}
+                          onChange={(e)=>{
+                            const v = e.target.value.replace(/[^0-9]/g,"");
+                            if(v===""){ setQtyMap({...qtyMap,[p._id]:1}); return; }
+                            const num = Math.max(1, Math.min(999, Number(v)));
+                            if(p.stockMode==="limited" && num > p.stock){ alert(`Only ${p.stock} left for ${p.name}`); setQtyMap({...qtyMap,[p._id]:p.stock}); return; }
+                            setQtyMap({...qtyMap,[p._id]:num});
+                          }}
+                          onFocus={(e)=>e.target.select()}
+                          className="w-10 text-center text-[12px] font-bold outline-none bg-white border-x"
+                          disabled={isOutOfStock}
+                        />
+                        <button type="button" onClick={()=>{ if(p.stockMode==="limited" && qty>=p.stock){ alert(`Only ${p.stock} left`); return; } setQtyMap({...qtyMap,[p._id]:Math.min(999, qty+1)}); }} className="px-2 bg-gray-100 font-bold" disabled={isOutOfStock}>+</button>
                       </div>
                       <button type="button" onClick={()=>addToCart(p,qty)} disabled={isOutOfStock || finalPrice===0} className={`flex-1 px-3 py-1 rounded-lg text-[11px] font-bold ${isOutOfStock || finalPrice===0 ? "bg-gray-300 text-gray-500" : "bg-green-600 text-white"}`}>{isOutOfStock ? "Out" : `Add Rs.${fmt(qty*finalPrice)}`}</button>
                     </div>
@@ -396,7 +406,6 @@ export default function SalesPage(){
             <button type="button" onClick={()=>{ void checkout(); }} disabled={cart.length===0} className="w-full bg-black text-white py-2.5 rounded-xl font-bold text-[13px] disabled:bg-gray-300">{paymentType==="credit"? `Udhar Rs.${fmt(cartTotal)} + Print` : `Sell Rs.${fmt(cartTotal)} • Profit ${fmt(cartProfit)} + Print`}</button>
             {pendingCount>0 && <button type="button" onClick={()=>void syncPendingSales()} className="w-full mt-2 bg-amber-500 text-white py-2 rounded-xl font-bold text-[11px]">Sync {pendingCount} Pending Now</button>}
           </div>
-
           <div className="bg-white border rounded-xl overflow-hidden">
             <div className="flex gap-1 p-2 border-b bg-gray-50 overflow-x-auto">
               {(["today","weekly","monthly","all"] as const).map((f)=>
