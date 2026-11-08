@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, useCallback, useSyncExternalStore } from "react";
+import { useEffect, useState, useCallback, useSyncExternalStore, useRef } from "react";
 import { offlineDB } from "@/lib/offline-db";
 import type { OfflineProduct } from "@/lib/offline-db";
 import { getOfflineUser } from "@/lib/offline-auth";
@@ -63,6 +63,7 @@ export default function ProductsPage() {
   const [syncing, setSyncing] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const refreshAfterAction = useCallback(async (currentSearch: string, cat: string) => {
     setPage(1);
@@ -158,9 +159,7 @@ export default function ProductsPage() {
           await offlineDB.products.update(p.localId, { synced: 1 });
           synced++;
         }
-      } catch {
-        // ignore
-      }
+      } catch {}
     }
     setPendingCount((prev) => Math.max(0, prev - synced));
     setSyncing(false);
@@ -339,13 +338,25 @@ export default function ProductsPage() {
       <div className="flex flex-col gap-3 mb-4">
         <h1 className="text-[20px] font-bold">📱 Imtiaz - Mobile-Accessories & Manyari - Stock</h1>
         <div className="flex gap-1.5 sm:gap-2">
-          <input 
-            placeholder="🔍 Search product..." 
-            value={search} 
-            onChange={(e) => handleSearchChange(e.target.value)} 
-            className="border p-2 sm:p-2.5 rounded-lg sm:rounded-xl flex-1 min-w-0 bg-white text-[12px] sm:text-[14px] h-8 sm:h-auto" 
-          />
-          <select 
+          <div className="relative flex-1">
+            <input 
+              ref={searchInputRef}
+              placeholder="🔍 Search product..." 
+              value={search} 
+              onChange={(e) => handleSearchChange(e.target.value)} 
+              className="border p-2 sm:p-2.5 pr-10 rounded-lg sm:rounded-xl w-full bg-white text-[12px] sm:text-[14px] h-8 sm:h-auto outline-none focus:ring-2 focus:ring-black" 
+            />
+            {search && (
+              <button
+                type="button"
+                onClick={() => { handleSearchChange(""); searchInputRef.current?.focus(); }}
+                className="absolute right-2 top-1/2 -translate-y-1/2 bg-gray-200 hover:bg-black hover:text-white w-6 h-6 sm:w-7 sm:h-7 rounded-full flex items-center justify-center text-[11px] font-bold"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+          {/* <select 
             value={categoryFilter} 
             onChange={(e) => { setCategoryFilter(e.target.value); setPage(1); }} 
             className="border p-2 sm:p-2.5 rounded-lg sm:rounded-xl bg-white text-[11px] sm:text-[13px] h-8 sm:h-auto shrink-0 max-w-27.5 sm:max-w-none"
@@ -355,7 +366,7 @@ export default function ProductsPage() {
             <option value="manyari">💍 Manyari</option>
             <option value="cosmetics">💄 Cosmetics</option>
             <option value="other">Other</option>
-          </select>
+          </select> */}
         </div>
       </div>
 

@@ -318,7 +318,24 @@ export default function SalesPage(){
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
         <div className="lg:col-span-2">
           <div className="flex gap-2 mb-2">
-            <input ref={searchRef} value={productSearch} onChange={(e)=>{setProductSearch(e.target.value); setProductPage(1);}} placeholder="🔍 Search e.g Vivo Cover / Pampers" className="flex-1 border p-2.5 rounded-xl bg-white text-[13px]" />
+            <div className="flex-1 relative">
+            <input 
+              ref={searchRef} 
+              value={productSearch} 
+              onChange={(e)=>{setProductSearch(e.target.value); setProductPage(1);}} 
+              placeholder="🔍 Search e.g Vivo Cover / Pampers" 
+              className="w-full border p-2.5 pr-10 rounded-xl bg-white text-[13px] outline-none focus:ring-2 focus:ring-black" 
+            />
+            {productSearch && (
+              <button 
+                type="button"
+                onClick={()=>{ setProductSearch(""); setProductPage(1); searchRef.current?.focus(); }}
+                className="absolute right-2 top-1/2 -translate-y-1/2 bg-gray-200 hover:bg-black hover:text-white w-7 h-7 rounded-full flex items-center justify-center text-[12px] font-bold"
+              >
+                ✕
+              </button>
+            )}
+          </div>
             <select value={categoryFilter} onChange={(e)=>{setCategoryFilter(e.target.value); setProductPage(1);}} className="border p-2.5 rounded-xl bg-white text-[12px]"><option value="all">All</option><option value="mobile_accessories">📱 Mobile</option><option value="manyari">💍 Manyari</option><option value="cosmetics">💄 Cosmetics</option><option value="other">Other</option></select>
           </div>
           <div className="flex justify-between items-center mb-2">
