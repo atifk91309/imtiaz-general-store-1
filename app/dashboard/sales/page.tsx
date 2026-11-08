@@ -88,14 +88,92 @@ export default function SalesPage(){
   },[]);
 
   const printBill = useCallback(async (cartItems: CartItem[], total: number, customer: string) => {
-    const lines = cartItems.map(i => `${i.name} x${i.qty} = Rs.${i.total}`).join('\n');
-    const bill = `Imtiaz General Store\n----------------\n${lines}\n----------------\nTotal: Rs.${total}\nCustomer: ${customer}\nDate: ${new Date().toLocaleString()}\nThank You!\n\n`;
-    const w = window.open('', '', 'width=320,height=600');
-    if (w) {
-      w.document.write(`<pre style="font-family:monospace;font-size:14px">${bill}</pre>`);
-      setTimeout(()=>{ w.print(); w.close(); }, 300);
-    }
-  }, []);
+  const today = new Date().toLocaleDateString('en-PK');
+  const serial = Date.now().toString().slice(-5);
+
+  // Table rows - fill 22 rows like your book
+  const rows = cartItems.map(i => `
+    <tr>
+      <td>${i.qty}</td>
+      <td style="text-align:right">${i.name}</td>
+      <td>${i.price}</td>
+      <td>${i.total}</td>
+    </tr>
+  `).join('');
+
+  const emptyRows = Math.max(0, 20 - cartItems.length);
+  const emptyHtml = Array(emptyRows).fill('<tr><td>&nbsp;</td><td></td><td></td><td></td></tr>').join('');
+
+  const billHtml = `
+  <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Nastaliq+Urdu:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    @page { size: A4; margin: 5mm; }
+    body { font-family: 'Noto Nastaliq Urdu', 'Jameel Noori Nastaleeq', serif; margin:0; padding:10px; direction: rtl; }
+    .header { text-align:center; border-bottom: 3px double #1e3a8a; padding-bottom:6px; }
+    .header h1 { font-size: 32px; color: #1e3a8a; margin:0; font-weight:700; line-height:1.2 }
+    .header .phones { font-family: monospace; font-size:12px; color:#1e3a8a; display:flex; justify-content:space-between; direction:ltr; }
+    .header .sub { font-size:11px; margin:4px 0; line-height:1.4 }
+    .blue-box { background:#1e3a8a; color:white; font-size:10px; padding:2px 10px; border-radius:12px; display:inline-block; margin:4px 0 }
+    .info { display:flex; justify-content:space-between; margin:10px 0; font-size:14px; }
+    .info span { border-bottom:1px solid #000; min-width:150px; display:inline-block; }
+    table { width:100%; border-collapse:collapse; margin-top:6px; }
+    th { background: #f8f8ff; border:2px solid #1e3a8a; padding:6px; font-size:14px; color:#1e3a8a }
+    td { border:1px solid #1e3a8a; padding:6px 4px; font-size:13px; text-align:center; height:22px }
+    td:nth-child(2) { text-align:right }
+    tfoot td { font-weight:bold; background:#f0f0ff }
+    .footer { margin-top:12px; display:flex; justify-content:space-between; font-size:12px; }
+    @media print { body { -webkit-print-color-adjust: exact; } }
+  </style>
+  </head><body>
+    <div class="header">
+      <div class="phones"><span>0343-3518722 :جنید<br>0343-8989277</span><h1>امتیاز جنرل سٹور</h1></div>
+      <div class="sub">ہمارے ہاں ایزی لوڈ، ایزی پیسہ، جاز کیش اور تمام نیٹ ورک کے کارڈز دستیاب ہیں۔ موبائل ایکسیریز، کاسمیٹکس اور جنرل آئٹم کی ہر قسم دستیاب ہے۔</div>
+      <div class="blue-box">مین بازار شیل پمپ نزد اسلامیہ کالج روڈ، اسلام آباد، خیبر پختونخوا</div>
+    </div>
+
+    <div class="info">
+      <div>سیریل نمبر: <span>${serial}</span></div>
+      <div>تاریخ: <span>${today}</span></div>
+    </div>
+    <div class="info">
+      <div>نام: <span>${customer}</span></div>
+      <div></div>
+    </div>
+
+    <table>
+      <thead><tr><th style="width:15%">تعداد</th><th style="width:45%">تفصیل</th><th style="width:20%">نرخ</th><th style="width:20%">روپے</th></tr></thead>
+      <tbody>${rows}${emptyHtml}</tbody>
+      <tfoot><tr><td></td><td style="text-align:left">ٹوٹل</td><td></td><td>Rs. ${total}</td></tr></tfoot>
+    </table>
+
+    <div class="footer">
+      <div>دستخط: ___________</div>
+      <div style="font-family:monospace; direction:ltr; font-size:10px">قاسم پریس شیوہ اڈہ 5341609-0336</div>
+    </div>
+  </body></html>
+  `;
+
+  // ✅ Mobile fix - iframe print (no window.open error)
+  const old = document.getElementById('imtiaz-print-iframe');
+  if (old) old.remove();
+  const iframe = document.createElement('iframe');
+  iframe.id = 'imtiaz-print-iframe';
+  iframe.style.position = 'fixed';
+  iframe.style.width = '0';
+  iframe.style.height = '0';
+  iframe.style.border = '0';
+  iframe.style.right = '0';
+  iframe.style.bottom = '0';
+  document.body.appendChild(iframe);
+  const doc = iframe.contentWindow?.document;
+  if (!doc) return;
+  doc.open();
+  doc.write(billHtml);
+  doc.close();
+  setTimeout(()=>{ iframe.contentWindow?.print(); }, 500);
+  setTimeout(()=>{ iframe.remove(); }, 15000);
+}, []);
 
   const connectPrinter = useCallback(async () => {
     try {
