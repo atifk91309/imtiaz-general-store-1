@@ -87,70 +87,67 @@ export default function SalesPage(){
   },[]);
 
   const printBill = useCallback(async (cartItems: CartItem[], total: number, customer: string) => {
-    const now = new Date();
-    const dateStr = now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' }).replace(/ /g, '-');
-    const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
-    const invNo = `INV-${Date.now().toString().slice(-6)}`;
-    const itemCount = cartItems.length;
-    const rows = cartItems.map(i => `<tr><td style="text-align:left; padding-left:6px">${i.name}</td><td>${i.qty}</td><td>${i.price.toFixed(2)}</td><td>${i.total.toFixed(2)}</td></tr>`).join('');
-    const billHtml = `
-    <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-    <style>
-      @page { size: 80mm auto; margin: 2mm; }
-      body { font-family: 'Courier New', monospace; margin:0; padding:4mm; width: 72mm; font-size: 11px; color: #000; }
-      .center { text-align:center } .bold { font-weight:bold }
-      .store-name { font-size:18px; font-weight:900; margin:4px 0 0 0 }
-      .address { font-size:10px; line-height:1.2; margin:2px 0 }
-      .phones { font-size:10px; font-weight:bold; margin:2px 0 }
-      .divider { border-top:1px solid #000; margin:4px 0 }
-      .info { font-size:10px; text-align:left; line-height:1.4 }
-      table { width:100%; border-collapse:collapse; margin-top:4px; }
-      th { border-top:1px solid #000; border-bottom:1px solid #000; padding:3px 2px; font-size:10px; text-align:center }
-      td { padding:3px 2px; font-size:10px; text-align:center; border-bottom:1px dotted #ccc }
-      td:first-child { text-align:left }
-      .totals { width:100%; margin-top:4px; border-top:1px solid #000; }
-      .totals td { border:none; padding:2px; font-size:11px; text-align:left }
-      .totals td:last-child { text-align:right; font-weight:bold }
-      .footer { text-align:center; font-size:9px; margin-top:8px; line-height:1.3; border-top:1px solid #000; padding-top:4px }
-    </style>
-    </head><body>
-      <div class="center">
-        <div class="store-name">Imtiaz General Store</div>
-        <div class="address">Main Ghulam Wheel Chowk Parmoli Road<br>Sultan Market Shewa</div>
-        <div class="phones">0343-3518722, 0343-8989277, Junaid</div>
-      </div>
-      <div class="divider"></div>
-      <div class="info">
-        <div>Inv no: ${invNo} &nbsp; ${dateStr} &nbsp; ${timeStr}</div>
-        <div class="bold" style="text-transform:uppercase">${customer.toUpperCase()}</div>
-      </div>
-      <table>
-        <thead><tr><th style="text-align:left; width:48%">Item Description</th><th style="width:12%">Qty</th><th style="width:18%">Rate</th><th style="width:22%">Amount</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-      <table class="totals">
-        <tr><td>No of Items: ${itemCount}</td><td>Amount:</td><td>${total.toFixed(2)}</td></tr>
-        <tr><td>Note</td><td>Discount:</td><td>0.00</td></tr>
-        <tr><td></td><td>Recieved:</td><td>${total.toFixed(2)}</td></tr>
-        <tr><td></td><td>Balance:</td><td>0.00</td></tr>
-      </table>
-      <div class="info" style="margin-top:6px; border-top:1px solid #000; padding-top:4px"><div>User: JUNAID KHAN</div></div>
-      <div class="footer">Thanks for Business with us<br>Please check your items before leaving counter<br>Please bring your receipt for refund / exchange</div>
-    </body></html>
-    `;
-    const old = document.getElementById('imtiaz-print-iframe');
-    if (old) old.remove();
-    const iframe = document.createElement('iframe');
-    iframe.id = 'imtiaz-print-iframe';
-    iframe.style.position = 'fixed'; iframe.style.width = '0'; iframe.style.height = '0'; iframe.style.border = '0';
-    iframe.style.right = '0'; iframe.style.bottom = '0';
-    document.body.appendChild(iframe);
-    const doc = iframe.contentWindow?.document;
-    if (!doc) return;
-    doc.open(); doc.write(billHtml); doc.close();
-    setTimeout(()=>{ iframe.contentWindow?.print(); }, 400);
-    setTimeout(()=>{ iframe.remove(); }, 12000);
-  }, []);
+  const now = new Date();
+  const dateStr = now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' }).replace(/ /g, '-');
+  const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+  const invNo = `INV-${Date.now().toString().slice(-6)}`;
+  const itemCount = cartItems.length;
+  const rows = cartItems.map(i => `<tr><td>${i.name}</td><td>${i.qty}</td><td>${i.price.toFixed(2)}</td><td>${i.total.toFixed(2)}</td></tr>`).join('');
+  
+  const billHtml = `
+  <html><head><meta charset="utf-8">
+  <style>
+    @page { size: 80mm auto; margin: 0; }
+    body { font-family: 'Courier New', monospace; margin:0; padding:2mm; width: 72mm; font-size: 10px; color: #000; }
+    .center { text-align:center } .bold { font-weight:bold }
+    .store-name { font-size:16px; font-weight:900; margin:0 }
+    .address { font-size:9px; line-height:1.2 }
+    .phones { font-size:9px; font-weight:bold }
+    .divider { border-top:1px solid #000; margin:3px 0 }
+    .info { font-size:9px; line-height:1.3 }
+    table { width:100%; border-collapse:collapse; border: 1.5px solid #000; }
+    th { border: 1px solid #000; padding:3px 2px; font-size:9px; text-align:center; background: #eee; }
+    td { border: 1px solid #000; padding:3px 2px; font-size:9px; text-align:center; }
+    td:first-child { text-align:left; padding-left:4px }
+    .totals { border: 1.5px solid #000; border-top:none; }
+    .totals td { border: 1px solid #000; padding:2px 3px; font-size:10px; text-align:left }
+    .totals td:last-child { text-align:right; font-weight:bold }
+    .footer { text-align:center; font-size:8px; margin-top:4px; border-top:1px solid #000; padding-top:3px }
+  </style>
+  </head><body>
+    <div class="center">
+      <div class="store-name">Imtiaz General Store</div>
+      <div class="address">Main Ghulam Wheel Chowk Parmoli Road<br>Sultan Market Shewa</div>
+      <div class="phones">0343-3518722, 0343-8989277, Junaid Khan</div>
+    </div>
+    <div class="divider"></div>
+    <div class="info">Inv no: ${invNo} ${dateStr} ${timeStr}<br><b>${customer.toUpperCase()}</b></div>
+    <table>
+      <thead><tr><th style="width:46%">Item Description</th><th style="width:12%">Qty</th><th style="width:18%">Rate</th><th style="width:24%">Amount</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <table class="totals">
+      <tr><td style="width:46%">No of Items: ${itemCount}</td><td style="width:30%">Amount:</td><td style="width:24%">${total.toFixed(2)}</td></tr>
+      <tr><td>Note</td><td>Discount:</td><td>0.00</td></tr>
+      <tr><td></td><td>Recieved:</td><td>${total.toFixed(2)}</td></tr>
+      <tr><td></td><td>Balance:</td><td>0.00</td></tr>
+    </table>
+    <div class="info" style="border:1.5px solid #000; border-top:none; padding:2px 3px">User: JUNAID KHAN</div>
+    <div class="footer">Thanks for Business with us<br>Please check your items before leaving counter</div>
+  </body></html>
+  `;
+  const old = document.getElementById('imtiaz-print-iframe');
+  if (old) old.remove();
+  const iframe = document.createElement('iframe');
+  iframe.id = 'imtiaz-print-iframe';
+  iframe.style.position = 'fixed'; iframe.style.width = '0'; iframe.style.height = '0'; iframe.style.border = '0';
+  document.body.appendChild(iframe);
+  const doc = iframe.contentWindow?.document;
+  if (!doc) return;
+  doc.open(); doc.write(billHtml); doc.close();
+  setTimeout(()=>{ iframe.contentWindow?.print(); }, 400);
+  setTimeout(()=>{ iframe.remove(); }, 8000);
+}, []);
 
   const connectPrinter = useCallback(async () => {
     try {
