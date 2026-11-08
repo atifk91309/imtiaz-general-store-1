@@ -85,7 +85,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const category = sp.get("category") || "";
     const rawPaymentType = sp.get("paymentType") || sp.get("type") || "";
     const page = Math.max(1, parseInt(sp.get("page") || "1", 10));
-    const limit = Math.min(100, Math.max(1, parseInt(sp.get("limit") || "20", 10)));
+    const limit = Math.min(1000, Math.max(1, parseInt(sp.get("limit") || "20", 10)));
     const skip = (page - 1) * limit;
     const userId = new Types.ObjectId(session.user.id);
 
