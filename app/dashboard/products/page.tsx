@@ -4,7 +4,7 @@ import { offlineDB } from "@/lib/offline-db";
 import type { OfflineProduct } from "@/lib/offline-db";
 import { getOfflineUser } from "@/lib/offline-auth";
 
-type Category = "mobile_accessories" | "manyari" | "cosmetics" | "other";
+type Category = "mobile_accessories" | "manyari" | "cosmetics" | "other" | "general";
 type Product = {
   _id: string;
   name: string;
@@ -14,10 +14,11 @@ type Product = {
   buyPriceAvg: number;
   sellPrice: number;
   stock: number;
+  barcode?: string;
   localId?: string;
   synced?: number;
 };
-type FormState = { name: string; category: Category; company: string; buyPrice: string; sellPrice: string; stock: string; };
+type FormState = { name: string; category: Category; company: string; buyPrice: string; sellPrice: string; stock: string; barcode: string; };
 type Pagination = { page: number; totalPages: number; hasMore: boolean; totalCount: number };
 type ProductsResponse = { products: Product[]; pagination: Pagination } | Product[];
 type OfflineUser = { _id?: string } | null;
@@ -43,15 +44,15 @@ function rnd(n: number) {
   return Math.round(n || 0);
 }
 function toProductCategory(c: string | undefined): Category {
-  if (c === "mobile_accessories" || c === "manyari" || c === "cosmetics" || c === "other") return c;
-  return "other";
+  if (c === "mobile_accessories" || c === "manyari" || c === "cosmetics" || c === "other" || c === "general") return c;
+  return "general";
 }
 
 export default function ProductsPage() {
   const isOnline = useIsOnline();
   const isOffline = !isOnline;
   const [products, setProducts] = useState<Product[]>([]);
-  const [form, setForm] = useState<FormState>({ name: "", category: "mobile_accessories", company: "", buyPrice: "", sellPrice: "", stock: "1" });
+  const [form, setForm] = useState<FormState>({ name: "", category: "general", company: "", buyPrice: "", sellPrice: "", stock: "1", barcode: "" });
   const [editId, setEditId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
@@ -65,13 +66,42 @@ export default function ProductsPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
+  // ✅ Universal scanner listener - Mobile + Desktop (USB OTG + Bluetooth)
+  useEffect(()=>{
+    let buffer = "";
+    let lastTime = 0;
+    const onKey = (e: KeyboardEvent)=>{
+      const target = e.target as HTMLElement;
+      if(target && (target.tagName==="INPUT" || target.tagName==="TEXTAREA")) {
+        // allow if search input focused, but still capture Enter for barcode
+        if(target !== searchInputRef.current) return;
+      }
+      const now = Date.now();
+      if(now - lastTime > 400) buffer = "";
+      lastTime = now;
+      if(e.key==="Enter" && buffer.length>2){
+        const code = buffer.trim();
+        buffer = "";
+        if(code){
+          setSearch(code);
+          setPage(1);
+          e.preventDefault();
+        }
+      } else if(e.key.length===1){
+        buffer += e.key;
+      }
+    };
+    window.addEventListener("keypress", onKey);
+    return ()=>window.removeEventListener("keypress", onKey);
+  },[]);
+
   const refreshAfterAction = useCallback(async (currentSearch: string, cat: string) => {
     setPage(1);
     if (typeof window !== "undefined" && !window.navigator.onLine) {
       const cached = await offlineDB.products.toArray();
       const searchLower = currentSearch.toLowerCase();
       const filtered = cached.filter((c) => {
-        const matchSearch = !currentSearch || c.name.toLowerCase().includes(searchLower);
+        const matchSearch = !currentSearch || c.name.toLowerCase().includes(searchLower) || (c.barcode && c.barcode.includes(currentSearch));
         const matchCat = cat === "all" || c.category === cat;
         return matchSearch && matchCat;
       });
@@ -85,6 +115,7 @@ export default function ProductsPage() {
         buyPriceAvg: c.buyPriceAvg || c.buyPrice || 0,
         sellPrice: c.sellPrice,
         stock: c.stock,
+        barcode: c.barcode,
         localId: c.localId,
         synced: c.synced,
       }));
@@ -119,6 +150,7 @@ export default function ProductsPage() {
           sellPrice: p.sellPrice,
           stock: p.stock,
           stockMode: "limited",
+          barcode: p.barcode,
           userId,
           synced: 1,
           createdAt: new Date().toISOString(),
@@ -146,12 +178,13 @@ export default function ProductsPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             name: p.name,
-            category: p.category || "other",
+            category: p.category || "general",
             company: p.company,
             buyPrice: p.buyPriceAvg,
             buyPriceAvg: p.buyPriceAvg,
             sellPrice: p.sellPrice,
             stock: p.stock,
+            barcode: p.barcode,
             localId: p.localId,
           }),
         });
@@ -177,7 +210,7 @@ export default function ProductsPage() {
         if (typeof window !== "undefined" && !window.navigator.onLine) {
           const searchLower = currentSearch.toLowerCase();
           const filtered = cached.filter((c) => {
-            const matchSearch = !currentSearch || c.name.toLowerCase().includes(searchLower);
+            const matchSearch = !currentSearch || c.name.toLowerCase().includes(searchLower) || (c.barcode && c.barcode.includes(currentSearch));
             const matchCat = cat === "all" || c.category === cat;
             return matchSearch && matchCat;
           });
@@ -191,6 +224,7 @@ export default function ProductsPage() {
             buyPriceAvg: c.buyPriceAvg || c.buyPrice || 0,
             sellPrice: c.sellPrice,
             stock: c.stock,
+            barcode: c.barcode,
             localId: c.localId,
             synced: c.synced,
           }));
@@ -246,7 +280,7 @@ export default function ProductsPage() {
       alert("Buy & Sell required");
       return;
     }
-    const payload = { name: form.name.trim(), category: form.category, company: form.company, buyPrice: buy, buyPriceAvg: buy, sellPrice: sell, stock };
+    const payload = { name: form.name.trim(), category: form.category, company: form.company, buyPrice: buy, buyPriceAvg: buy, sellPrice: sell, stock, barcode: form.barcode.trim() || undefined };
     const offlineUser = getOfflineUser() as OfflineUser;
     setUpdating(true);
     try {
@@ -263,12 +297,13 @@ export default function ProductsPage() {
           sellPrice: sell,
           stock,
           stockMode: "limited",
+          barcode: payload.barcode,
           userId: offlineUser?._id || "offline",
           synced: 0,
           createdAt: new Date().toISOString(),
         });
         setPendingCount((c) => c + 1);
-        setForm({ name: "", category: "mobile_accessories", company: "", buyPrice: "", sellPrice: "", stock: "1" });
+        setForm({ name: "", category: "general", company: "", buyPrice: "", sellPrice: "", stock: "1", barcode: "" });
         setEditId(null);
         await refreshAfterAction(search, categoryFilter);
         return;
@@ -293,6 +328,7 @@ export default function ProductsPage() {
         sellPrice: sell,
         stock,
         stockMode: "limited",
+        barcode: payload.barcode,
         userId: offlineUser?._id || "offline",
         synced: 0,
         createdAt: new Date().toISOString(),
@@ -301,14 +337,14 @@ export default function ProductsPage() {
     } finally {
       setUpdating(false);
     }
-    setForm({ name: "", category: "mobile_accessories", company: "", buyPrice: "", sellPrice: "", stock: "1" });
+    setForm({ name: "", category: "general", company: "", buyPrice: "", sellPrice: "", stock: "1", barcode: "" });
     setEditId(null);
     await refreshAfterAction(search, categoryFilter);
   };
 
   const handleEdit = (p: Product) => {
     setEditId(p._id);
-    setForm({ name: p.name, category: p.category, company: p.company || "", buyPrice: String(p.buyPriceAvg || p.buyPrice), sellPrice: String(p.sellPrice), stock: String(p.stock) });
+    setForm({ name: p.name, category: p.category, company: p.company || "", buyPrice: String(p.buyPriceAvg || p.buyPrice), sellPrice: String(p.sellPrice), stock: String(p.stock), barcode: p.barcode || "" });
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -336,61 +372,53 @@ export default function ProductsPage() {
       {isOffline && <div className="mb-3 bg-amber-50 border border-amber-200 text-amber-800 text-[12px] p-2.5 rounded-xl text-center">📶 Offline • {pendingCount} pending</div>}
       {pendingCount > 0 && !isOffline && <div className="mb-3 bg-blue-50 border border-blue-200 text-blue-800 text-[12px] p-2.5 rounded-xl flex justify-between"><span>{pendingCount} pending sync</span><button onClick={() => syncPendingProducts()} disabled={syncing} className="bg-blue-600 text-white px-3 py-1 rounded-lg text-[11px]">{syncing ? "Syncing..." : "Sync Now"}</button></div>}
       <div className="flex flex-col gap-3 mb-4">
-        <h1 className="text-[20px] font-bold">📱 Imtiaz - Mobile-Accessories & Manyari - Stock</h1>
+        <h1 className="text-[20px] font-bold">📦 Imtiaz Store - Stock (General + Mobile)</h1>
         <div className="flex gap-1.5 sm:gap-2">
           <div className="relative flex-1">
             <input 
               ref={searchInputRef}
-              placeholder="🔍 Search product..." 
+              placeholder="🔍 Scan barcode or search name..." 
               value={search} 
               onChange={(e) => handleSearchChange(e.target.value)} 
-              className="border p-2 sm:p-2.5 pr-10 rounded-lg sm:rounded-xl w-full bg-white text-[12px] sm:text-[14px] h-8 sm:h-auto outline-none focus:ring-2 focus:ring-black" 
+              className="border p-2 sm:p-2.5 pr-10 rounded-xl w-full bg-white text-[13px] h-10 outline-none focus:ring-2 focus:ring-black" 
             />
             {search && (
               <button
                 type="button"
                 onClick={() => { handleSearchChange(""); searchInputRef.current?.focus(); }}
-                className="absolute right-2 top-1/2 -translate-y-1/2 bg-gray-200 hover:bg-black hover:text-white w-6 h-6 sm:w-7 sm:h-7 rounded-full flex items-center justify-center text-[11px] font-bold"
+                className="absolute right-2 top-1/2 -translate-y-1/2 bg-gray-200 hover:bg-black hover:text-white w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold"
               >
                 ✕
               </button>
             )}
           </div>
-          {/* <select 
-            value={categoryFilter} 
-            onChange={(e) => { setCategoryFilter(e.target.value); setPage(1); }} 
-            className="border p-2 sm:p-2.5 rounded-lg sm:rounded-xl bg-white text-[11px] sm:text-[13px] h-8 sm:h-auto shrink-0 max-w-27.5 sm:max-w-none"
-          >
-            <option value="all">All</option>
-            <option value="mobile_accessories">📱 Mobile</option>
-            <option value="manyari">💍 Manyari</option>
-            <option value="cosmetics">💄 Cosmetics</option>
-            <option value="other">Other</option>
-          </select> */}
         </div>
+        <p className="text-[11px] text-gray-500">💡 Tip: USB/Bluetooth scanner lagao, barcode scan karte hi auto search hoga — Mobile + Desktop dono pe</p>
       </div>
 
       <form onSubmit={handleSubmit} className="bg-white p-3 rounded-xl shadow-sm border mb-6">
-        <p className="font-semibold mb-3 text-[13px]">{editId ? "Edit Product" : "Add New Product"}</p>
+        <p className="font-semibold mb-3 text-[13px]">{editId ? "Edit Product" : "Add New Product (General + Barcode)"}</p>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
           <input placeholder="Product Name * e.g Vivo Cover" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="border p-2.5 rounded-lg col-span-2 sm:col-span-2 text-[13px]" required />
           <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value as Category })} className="border p-2.5 rounded-lg bg-white text-[13px]">
+            <option value="general">🛒 General</option>
             <option value="mobile_accessories">📱 Mobile Accessories</option>
             <option value="manyari">💍 Manyari</option>
             <option value="cosmetics">💄 Cosmetics</option>
             <option value="other">Other</option>
           </select>
+          <input placeholder="Barcode (scan gun se)" value={form.barcode} onChange={(e) => setForm({ ...form, barcode: e.target.value })} className="border p-2.5 rounded-lg text-[13px] bg-yellow-50" />
           <input placeholder="Company (optional)" value={form.company} onChange={(e) => setForm({ ...form, company: e.target.value })} className="border p-2.5 rounded-lg text-[13px]" />
-          <input placeholder="Buy Price * e.g 200" type="number" value={form.buyPrice} onChange={(e) => setForm({ ...form, buyPrice: e.target.value })} className="border p-2.5 rounded-lg text-[13px] bg-red-50" required />
-          <input placeholder="Sell Price * e.g 350" type="number" value={form.sellPrice} onChange={(e) => setForm({ ...form, sellPrice: e.target.value })} className="border p-2.5 rounded-lg text-[13px] bg-green-50" required />
+          <input placeholder="Buy Price *" type="number" value={form.buyPrice} onChange={(e) => setForm({ ...form, buyPrice: e.target.value })} className="border p-2.5 rounded-lg text-[13px] bg-red-50" required />
+          <input placeholder="Sell Price *" type="number" value={form.sellPrice} onChange={(e) => setForm({ ...form, sellPrice: e.target.value })} className="border p-2.5 rounded-lg text-[13px] bg-green-50" required />
           <input placeholder="Stock Qty" type="number" value={form.stock} onChange={(e) => setForm({ ...form, stock: e.target.value })} className="border p-2.5 rounded-lg text-[13px]" required />
         </div>
         {Number(form.buyPrice) > 0 && Number(form.sellPrice) > 0 && (
-          <p className="mt-2 text-[12px] text-green-600">Profit: Rs.{rnd(Number(form.sellPrice) - Number(form.buyPrice))} per piece | Total Buy Rs.{rnd(Number(form.buyPrice) * (Number(form.stock) || 0))}</p>
+          <p className="mt-2 text-[12px] text-green-600">Profit: Rs.{rnd(Number(form.sellPrice) - Number(form.buyPrice))} | Buy Total Rs.{rnd(Number(form.buyPrice) * (Number(form.stock) || 0))} | {form.barcode ? `Barcode: ${form.barcode}` : "No barcode"}</p>
         )}
         <div className="flex gap-2 mt-3">
           <button type="submit" disabled={updating} className="bg-green-600 text-white px-6 py-2 rounded-lg text-[13px] disabled:opacity-50">{updating ? "Saving..." : editId ? "Update" : "+ Add Product"}</button>
-          {editId && <button type="button" onClick={() => { setEditId(null); setForm({ name: "", category: "mobile_accessories", company: "", buyPrice: "", sellPrice: "", stock: "1" }); }} className="bg-gray-100 px-6 py-2 rounded-lg text-[13px]">Cancel</button>}
+          {editId && <button type="button" onClick={() => { setEditId(null); setForm({ name: "", category: "general", company: "", buyPrice: "", sellPrice: "", stock: "1", barcode: "" }); }} className="bg-gray-100 px-6 py-2 rounded-lg text-[13px]">Cancel</button>}
         </div>
       </form>
 
@@ -404,8 +432,8 @@ export default function ProductsPage() {
               const totalSell = p.stock * p.sellPrice;
               return (
                 <div key={p._id} className="bg-white border p-3 rounded-xl shadow-sm">
-                  <div className="flex justify-between"><p className="font-semibold text-[13px] truncate">{p.name}</p><span className={`text-[10px] px-2 py-0.5 rounded-full ${p.category === "mobile_accessories" ? "bg-blue-100 text-blue-700" : p.category === "manyari" ? "bg-pink-100 text-pink-700" : "bg-gray-100"}`}>{p.category}</span></div>
-                  <p className="text-[11px] text-gray-500">{p.company || ""} • Stock: {p.stock}</p>
+                  <div className="flex justify-between"><p className="font-semibold text-[13px] truncate">{p.name}</p><span className={`text-[10px] px-2 py-0.5 rounded-full ${p.category === "general" ? "bg-green-100 text-green-700" : p.category === "mobile_accessories" ? "bg-blue-100 text-blue-700" : p.category === "manyari" ? "bg-pink-100 text-pink-700" : "bg-gray-100"}`}>{p.category} {p.barcode ? "• 📷" : ""}</span></div>
+                  <p className="text-[11px] text-gray-500">{p.company || ""} • Stock: {p.stock} {p.barcode ? `• ${p.barcode}` : ""}</p>
                   <div className="grid grid-cols-3 gap-1 mt-2 text-[10px]">
                     <div className="bg-red-50 p-1.5 rounded text-center"><div className="text-gray-500">Buy</div><div className="font-bold">Rs.{rnd(buy)}</div><div className="border-t mt-1 pt-1">Total {rnd(totalBuy)}</div></div>
                     <div className="bg-blue-50 p-1.5 rounded text-center"><div className="text-gray-500">Sell</div><div className="font-bold">Rs.{rnd(p.sellPrice)}</div><div className="border-t mt-1 pt-1">Total {rnd(totalSell)}</div></div>

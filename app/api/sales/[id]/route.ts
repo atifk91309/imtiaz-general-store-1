@@ -134,7 +134,7 @@ export async function DELETE(_req: NextRequest, { params }: Params): Promise<Nex
 
     const product = await Product.findOne({ _id: saleDoc.productId, userId });
     if (product && product.stockMode === "limited") {
-      product.stock = rnd(product.stock + saleDoc.quantity);
+      product.stock = rnd(product.stock + rnd(saleDoc.quantity));
       await product.save();
     }
 

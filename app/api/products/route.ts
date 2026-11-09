@@ -8,15 +8,18 @@ import { Types } from "mongoose";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
+type ProductCategory = "mobile_accessories" | "manyari" | "cosmetics" | "other" | "general";
+
 type ProductBody = {
   name: string;
-  category?: "mobile_accessories" | "manyari" | "cosmetics" | "other";
+  category?: ProductCategory;
   company?: string;
   buyPrice?: number;
   buyPriceAvg?: number;
   sellPrice: number;
   stock?: number;
   stockMode?: "limited" | "unlimited";
+  barcode?: string;
   localId?: string;
 };
 
@@ -29,6 +32,7 @@ type ProductQuery = {
   category?: string;
   name?: { $regex: string; $options: string };
   stock?: { $gt?: number; $lte?: number };
+  $or?: Array<{ name?: { $regex: string; $options: string }; barcode?: string; company?: { $regex: string; $options: string } }>;
 };
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
@@ -51,9 +55,17 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const baseQuery: ProductQuery = { userId };
 
     if (category && category !== "all") baseQuery.category = category;
-    if (search) baseQuery.name = { $regex: search, $options: "i" };
     if (stockFilter === "low") baseQuery.stock = { $gt: 0, $lte: 2 };
     if (stockFilter === "out") baseQuery.stock = { $lte: 0 };
+
+    // ✅ Scanner + name + barcode search (mobile + desktop)
+    if (search) {
+      baseQuery.$or = [
+        { name: { $regex: search, $options: "i" } },
+        { barcode: search },
+        { company: { $regex: search, $options: "i" } },
+      ];
+    }
 
     const [products, totalCount] = await Promise.all([
       Product.find(baseQuery).sort({ createdAt: -1 }).skip(skip).limit(limit).lean({ virtuals: true }),
@@ -90,30 +102,46 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
     const userId = new Types.ObjectId(session.user.id);
     const buy = rnd(body.buyPriceAvg ?? body.buyPrice ?? 0);
+    const barcode = body.barcode?.trim() ? body.barcode.trim() : undefined;
 
     if (body.localId) {
       const existing = await Product.findOne({ localId: body.localId, userId }).lean();
       if (existing) return NextResponse.json(existing, { status: 200 });
     }
 
-    // FIX: Check duplicate — use buyPriceAvg only, not buyPrice
+    // ✅ Check duplicate by barcode first (scanner best)
+    if (barcode) {
+      const byBarcode = await Product.findOne({ barcode, userId });
+      if (byBarcode) {
+        byBarcode.stock = rnd((byBarcode.stock || 0) + rnd(body.stock || 0));
+        byBarcode.sellPrice = rnd(body.sellPrice);
+        byBarcode.buyPriceAvg = buy;
+        byBarcode.name = body.name.trim();
+        if (body.category) byBarcode.category = body.category;
+        await byBarcode.save();
+        return NextResponse.json(byBarcode, { status: 200 });
+      }
+    }
+
     const dup = await Product.findOne({ name: body.name.trim(), userId });
     if (dup) {
       dup.stock = rnd((dup.stock || 0) + rnd(body.stock || 0));
       dup.sellPrice = rnd(body.sellPrice);
-      dup.buyPriceAvg = buy; // virtual buyPrice setter will also set this
+      dup.buyPriceAvg = buy;
+      if (barcode) dup.barcode = barcode;
       await dup.save();
       return NextResponse.json(dup, { status: 200 });
     }
 
     const product = await Product.create({
       name: body.name.trim(),
-      category: body.category || "mobile_accessories",
+      category: body.category || "general",
       company: body.company?.trim() || "",
       buyPriceAvg: buy,
       sellPrice: rnd(body.sellPrice),
       stock: rnd(body.stock || 0),
       stockMode: body.stockMode || "limited",
+      barcode,
       userId,
       localId: body.localId,
       synced: true,

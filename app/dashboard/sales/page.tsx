@@ -6,8 +6,8 @@ import { getOfflineUser } from "@/lib/offline-auth";
 
 type BluetoothDevice = { name?: string; gatt?: { connect: () => Promise<void> } };
 type BluetoothNavigator = { bluetooth?: { requestDevice: (options: Record<string, unknown>) => Promise<BluetoothDevice> } };
-type Category = "mobile_accessories" | "manyari" | "cosmetics" | "other";
-type Product = { _id: string; name: string; category: Category; buyPrice: number; buyPriceAvg: number; sellPrice: number; stock: number; stockMode: "limited"|"unlimited"; };
+type Category = "mobile_accessories" | "manyari" | "cosmetics" | "other" | "general";
+type Product = { _id: string; name: string; category: Category; buyPrice: number; buyPriceAvg: number; sellPrice: number; stock: number; stockMode: "limited"|"unlimited"; barcode?: string; };
 type Sale = { _id: string; productId: string; productName: string; category: Category; quantity: number; sellPrice: number; total: number; profit: number; createdAt: string; customerName?: string; status?: string; paymentType?: string; };
 type CartItem = { cartId: string; productId: string; name: string; qty: number; price: number; total: number; category: Category; buyPrice: number; buyPriceAvg: number };
 type FilterType = "today"|"weekly"|"monthly"|"all";
@@ -25,6 +25,10 @@ function useIsOnline(){
 }
 function rnd(n:number){return Math.round(n||0);}
 function fmt(n:number){return rnd(n).toString();}
+function toCat(c: string | undefined): Category {
+  if(c==="mobile_accessories" || c==="manyari" || c==="cosmetics" || c==="other" || c==="general") return c;
+  return "general";
+}
 
 export default function SalesPage(){
   const [sales, setSales] = useState<Sale[]>([]);
@@ -55,7 +59,7 @@ export default function SalesPage(){
   const isOffline = mounted && !isOnlineHook;
   const searchRef = useRef<HTMLInputElement>(null);
   const customerInputRef = useRef<HTMLInputElement>(null);
-// eslint-disable-next-line react-hooks/set-state-in-effect
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(()=>{ setMounted(true); },[]);
   const refreshCounts = useCallback(async()=>{ try{ const c=await offlineDB.sales.where("synced").equals(0).count(); setPendingCount(c);}catch{} },[]);
   const syncPendingSales = useCallback(async()=>{
@@ -81,10 +85,10 @@ export default function SalesPage(){
       const offlineUser = getOfflineUser() as OfflineUser;
       const userId = offlineUser?._id || offlineUser?.id || "offline";
       const toCache: OfflineProduct[] = list.map((p)=>({
-        _id: p._id, localId: p._id, name: p.name, category: p.category, company: "", buyPrice: p.buyPriceAvg||p.buyPrice, buyPriceAvg: p.buyPriceAvg||p.buyPrice, sellPrice: p.sellPrice, stock: p.stock, stockMode: p.stockMode, userId, synced: 1, createdAt: new Date().toISOString(),
+        _id: p._id, localId: p._id, name: p.name, category: toCat(p.category), company: "", buyPrice: p.buyPriceAvg||p.buyPrice, buyPriceAvg: p.buyPriceAvg||p.buyPrice, sellPrice: p.sellPrice, stock: p.stock, stockMode: p.stockMode, barcode: p.barcode, userId, synced: 1, createdAt: new Date().toISOString(),
       }));
       await offlineDB.products.bulkPut(toCache);
-      alert(`Cached ${toCache.length} products for offline! - Imtiaz Store`);
+      alert(`Cached ${toCache.length} products for offline!`);
     }catch{ alert("Cache failed"); }
   },[]);
 
@@ -105,10 +109,10 @@ export default function SalesPage(){
   const connectPrinter = useCallback(async () => {
     try {
       const nav = window.navigator as unknown as BluetoothNavigator;
-      if (!nav.bluetooth) { alert("Bluetooth not supported in this browser. Use Chrome on Android for BT printing."); return; }
+      if (!nav.bluetooth) { alert("Bluetooth not supported. Use Chrome on Android."); return; }
       const device = await nav.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: ['battery_service', '000018f0-0000-1000-8000-00805f9b34fb', '49535343-fe7d-4ae5-8fa9-9fafd205e455', '0000ff00-0000-1000-8000-00805f9b34fb'] });
-      await device.gatt?.connect(); setPrinterName(device.name || "Thermal Printer"); setPrinterConnected(true); alert(`✅ Connected: ${device.name || "Thermal Printer"} - Imtiaz Store Ready to Print`);
-    } catch (err: unknown) { const msg = err instanceof Error ? err.message : ""; if (msg.includes("User cancelled")) return; alert("Printer connect failed. Pair printer in phone Bluetooth first."); }
+      await device.gatt?.connect(); setPrinterName(device.name || "Thermal Printer"); setPrinterConnected(true); alert(`✅ Connected: ${device.name || "Thermal Printer"}`);
+    } catch (err: unknown) { const msg = err instanceof Error ? err.message : ""; if (msg.includes("User cancelled")) return; alert("Printer connect failed. Pair first in Bluetooth settings."); }
   }, []);
 
   useEffect(()=>{
@@ -118,16 +122,16 @@ export default function SalesPage(){
       try{
         if(!navigator.onLine){
           const cached=await offlineDB.products.toArray();
-          const filtered=cached.filter((c)=>{ const s=productSearch.toLowerCase(); return (!s||c.name.toLowerCase().includes(s)) && (categoryFilter==="all"||c.category===categoryFilter); });
+          const filtered=cached.filter((c)=>{ const s=productSearch.toLowerCase(); return (!s||c.name.toLowerCase().includes(s)|| (c.barcode && c.barcode.includes(productSearch))) && (categoryFilter==="all"||c.category===categoryFilter); });
           const LIMIT = 20; const paged = filtered.slice(0, productPage * LIMIT);
-          const mapped: Product[] = paged.map((c)=>({ _id:c._id||c.localId, name:c.name, category:(c.category as Category)||"other", buyPrice:c.buyPriceAvg||c.buyPrice, buyPriceAvg:c.buyPriceAvg||c.buyPrice, sellPrice:c.sellPrice, stock:c.stock, stockMode:c.stockMode||"limited" }));
+          const mapped: Product[] = paged.map((c)=>({ _id:c._id||c.localId, name:c.name, category:toCat(c.category), buyPrice:c.buyPriceAvg||c.buyPrice, buyPriceAvg:c.buyPriceAvg||c.buyPrice, sellPrice:c.sellPrice, stock:c.stock, stockMode:c.stockMode||"limited", barcode: c.barcode }));
           if(!cancelled){ setProducts(mapped); setProductPagination({ page: productPage, totalPages: Math.ceil(filtered.length / LIMIT) || 1, hasMore: filtered.length > paged.length, totalCount: filtered.length }); }
         } else {
           const res=await fetch(`/api/products?search=${encodeURIComponent(productSearch)}&category=${categoryFilter}&page=${productPage}&limit=20`);
           const data=(await res.json()) as ProductApiResponse; let list: Product[] = []; let pag: Pagination | undefined;
           if(Array.isArray(data)){ list = data; } else { list = data.products; pag = data.pagination; }
-          if(list.length>0){ const offlineUser = getOfflineUser() as OfflineUser; const userId = offlineUser?._id || offlineUser?.id || "offline"; const toCache: OfflineProduct[] = list.map((p)=>({ _id: p._id, localId: p._id, name: p.name, category: p.category, company: "", buyPrice: p.buyPriceAvg||p.buyPrice, buyPriceAvg: p.buyPriceAvg||p.buyPrice, sellPrice: p.sellPrice, stock: p.stock, stockMode: p.stockMode, userId, synced: 1, createdAt: new Date().toISOString(), })); await offlineDB.products.bulkPut(toCache).catch(()=>{}); }
-          if(!cancelled){ const mappedList = list.map((p)=>({ _id:p._id, name:p.name, category:p.category, buyPrice:p.buyPriceAvg||p.buyPrice||0, buyPriceAvg:p.buyPriceAvg||p.buyPrice||0, sellPrice:p.sellPrice, stock:p.stock, stockMode:p.stockMode })); if(productPage===1) setProducts(mappedList); else setProducts((prev)=>[...prev, ...mappedList]); if(pag) setProductPagination(pag); }
+          if(list.length>0){ const offlineUser = getOfflineUser() as OfflineUser; const userId = offlineUser?._id || offlineUser?.id || "offline"; const toCache: OfflineProduct[] = list.map((p)=>({ _id: p._id, localId: p._id, name: p.name, category: toCat(p.category), company: "", buyPrice: p.buyPriceAvg||p.buyPrice, buyPriceAvg: p.buyPriceAvg||p.buyPrice, sellPrice: p.sellPrice, stock: p.stock, stockMode: p.stockMode, barcode: p.barcode, userId, synced: 1, createdAt: new Date().toISOString(), })); await offlineDB.products.bulkPut(toCache).catch(()=>{}); }
+          if(!cancelled){ const mappedList = list.map((p)=>({ _id:p._id, name:p.name, category:toCat(p.category), buyPrice:p.buyPriceAvg||p.buyPrice||0, buyPriceAvg:p.buyPriceAvg||p.buyPrice||0, sellPrice:p.sellPrice, stock:p.stock, stockMode:p.stockMode, barcode: p.barcode })); if(productPage===1) setProducts(mappedList); else setProducts((prev)=>[...prev, ...mappedList]); if(pag) setProductPagination(pag); }
         }
       }catch{} finally{ if(!cancelled){ setLoadingProducts(false); setLoadingMoreProducts(false); } }
     }; void load(); return()=>{ cancelled=true; };
@@ -144,7 +148,7 @@ export default function SalesPage(){
         if(f==="monthly"){ const m=new Date(); m.setMonth(now.getMonth()-1); filtered=filtered.filter((s)=>new Date(s.createdAt)>=m); }
         setAllSalesTotal(filtered.reduce((a,b)=>a+(b.total||0),0));
         setAllSalesProfit(filtered.reduce((a,b)=>a+(b.profit||0),0));
-        const mapped: Sale[]=filtered.slice((p-1)*20,p*20).map((o)=>({ _id:o.localId, productId:o.productId, productName:o.productName, category:o.category||"other", quantity:o.quantity, sellPrice:o.sellPrice, total:o.total, profit:o.profit, createdAt:o.createdAt, customerName:o.customerName, status:o.status, paymentType:o.paymentType }));
+        const mapped: Sale[]=filtered.slice((p-1)*20,p*20).map((o)=>({ _id:o.localId, productId:o.productId, productName:o.productName, category:toCat(o.category), quantity:o.quantity, sellPrice:o.sellPrice, total:o.total, profit:o.profit, createdAt:o.createdAt, customerName:o.customerName, status:o.status, paymentType:o.paymentType }));
         if(p===1) setSales(mapped); else setSales((prev)=>[...prev,...mapped]);
         setPagination({page:p,totalPages:Math.ceil(filtered.length/20),hasMore:filtered.length>p*20,totalCount:filtered.length});
       } else {
@@ -159,7 +163,6 @@ export default function SalesPage(){
       }
     }catch{} finally{ setLoadingSales(false); }
   },[]);
-
 // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(()=>{ void loadSales(filter,page); void refreshCounts(); void syncPendingSales(); },[filter,page,loadSales,refreshCounts,syncPendingSales]);
 
@@ -184,6 +187,43 @@ export default function SalesPage(){
       return [...prev, newItem];
     });
   },[paymentType, customerName, getFinalPrice]);
+
+  // ✅ Barcode scanner -> auto add to cart (mobile + desktop)
+  useEffect(()=>{
+    if(products.length===0) return;
+    let buffer = "";
+    let lastTime = 0;
+    const tryAdd = (code:string)=>{
+      const found = products.find(p=> p.barcode && p.barcode===code);
+      if(found){
+        addToCart(found,1);
+        // feedback
+        try{ const a = new Audio(); }catch{}
+        searchRef.current?.blur();
+      } else {
+        // if not in current list, search
+        setProductSearch(code);
+        setProductPage(1);
+      }
+    };
+    const onKey = (e:KeyboardEvent)=>{
+      const t = e.target as HTMLElement;
+      if(t && t.tagName==="INPUT" && t!==searchRef.current) return;
+      const now = Date.now();
+      if(now-lastTime>300) buffer="";
+      lastTime=now;
+      if(e.key==="Enter" && buffer.length>2){
+        const code = buffer.trim();
+        buffer="";
+        tryAdd(code);
+        e.preventDefault();
+      } else if(e.key.length===1){
+        buffer+=e.key;
+      }
+    };
+    window.addEventListener("keypress", onKey);
+    return ()=>window.removeEventListener("keypress", onKey);
+  },[products, addToCart]);
 
   const removeFromCart=useCallback((cartId:string)=>setCart((prev)=>prev.filter((c)=>c.cartId!==cartId)), []);
   const cartTotal=cart.reduce((s,c)=>s+c.total,0);
@@ -220,16 +260,17 @@ export default function SalesPage(){
         <div className="lg:col-span-2">
           <div className="flex gap-2 mb-2">
             <div className="flex-1 relative">
-            <input ref={searchRef} value={productSearch} onChange={(e)=>{setProductSearch(e.target.value); setProductPage(1);}} placeholder="🔍 Search e.g Vivo Cover / Pampers" className="w-full border p-2.5 pr-10 rounded-xl bg-white text-[13px] outline-none focus:ring-2 focus:ring-black" />
+            <input ref={searchRef} value={productSearch} onChange={(e)=>{setProductSearch(e.target.value); setProductPage(1);}} placeholder="🔍 Scan barcode or name..." className="w-full border p-2.5 pr-10 rounded-xl bg-white text-[13px] outline-none focus:ring-2 focus:ring-black" />
             {productSearch && (<button type="button" onClick={()=>{ setProductSearch(""); setProductPage(1); searchRef.current?.focus(); }} className="absolute right-2 top-1/2 -translate-y-1/2 bg-gray-200 hover:bg-black hover:text-white w-7 h-7 rounded-full flex items-center justify-center text-[12px] font-bold">✕</button>)}
           </div>
-            <select value={categoryFilter} onChange={(e)=>{setCategoryFilter(e.target.value); setProductPage(1);}} className="border p-2.5 rounded-xl bg-white text-[12px]"><option value="all">All</option><option value="mobile_accessories">📱 Mobile</option><option value="manyari">💍 Manyari</option><option value="cosmetics">💄 Cosmetics</option><option value="other">Other</option></select>
+            <select value={categoryFilter} onChange={(e)=>{setCategoryFilter(e.target.value); setProductPage(1);}} className="border p-2.5 rounded-xl bg-white text-[12px]"><option value="all">All</option><option value="general">🛒 General</option><option value="mobile_accessories">📱 Mobile</option><option value="manyari">💍 Manyari</option><option value="cosmetics">💄 Cosmetics</option><option value="other">Other</option></select>
           </div>
+          <p className="text-[10px] text-gray-500 mb-2">💡 Barcode scanner se scan karo — auto cart me add hoga (Mobile OTG + Desktop USB)</p>
           <div className="flex justify-between items-center mb-2">
-            <p className="text-[10px] text-gray-500">Showing {products.length}/{productPagination.totalCount} - Mobile fast billing ready</p>
+            <p className="text-[10px] text-gray-500">Showing {products.length}/{productPagination.totalCount}</p>
             {!isOffline && <button onClick={()=>void cacheAllProductsOnce()} className="text-[10px] bg-black text-white px-2 py-1 rounded-lg">Cache All for Offline</button>}
           </div>
-          {loadingProducts? <p className="text-center py-6 text-[12px]">Loading Imtiaz Store...</p> : (
+          {loadingProducts? <p className="text-center py-6 text-[12px]">Loading...</p> : (
             <>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {products.map((p)=>{
@@ -239,7 +280,7 @@ export default function SalesPage(){
                 const remaining = p.stockMode==="limited" ? Math.max(0, p.stock - cartQty) : 999; const finalPrice = getFinalPrice(p);
                 return(
                   <div key={p._id} className={`bg-white border rounded-xl p-3 ${isOutOfStock ? "opacity-70 bg-red-50 border-red-200" : ""}`}>
-                    <p className="font-bold text-[13px] truncate">{p.name} {isOutOfStock && <span className="text-red-600 text-[10px] ml-1">● OUT</span>}</p>
+                    <p className="font-bold text-[13px] truncate flex justify-between"><span>{p.name} {isOutOfStock && <span className="text-red-600 text-[10px] ml-1">● OUT</span>}</span><span className="text-[9px] bg-gray-100 px-1.5 rounded">{p.barcode ? `📷 ${p.barcode}` : p.category}</span></p>
                     <p className="text-[11px] text-gray-500">{p.category} • Stock {p.stockMode==="unlimited"?"∞":p.stock} {p.stockMode==="limited" && !isOutOfStock ? `(Left ${remaining})` : ""} • Buy {fmt(buy)}</p>
                     <div className="flex gap-2 mt-2 items-center">
                       <span className="text-[11px] whitespace-nowrap">Sell Rs.</span>
@@ -268,7 +309,7 @@ export default function SalesPage(){
         <div className="space-y-3">
           <div className="bg-white border rounded-xl p-3 sticky top-2">
             <div className="flex justify-between items-center mb-2"><p className="font-bold text-[13px]">🛒 Cart ({cart.length}) - Rs.{fmt(cartTotal)}</p><div className="flex gap-1"><button onClick={connectPrinter} className="text-[10px] bg-blue-50 text-blue-700 border border-blue-200 px-2 py-1 rounded-lg font-bold">{printerConnected?"🖨️ Connected":"🖨️ BT"}</button><button onClick={()=>{ if(cart.length>0) void printBill(cart, cartTotal, customerName); }} className="text-[10px] bg-black text-white px-2 py-1 rounded-lg font-bold">Print</button></div></div>
-            <div className="space-y-1 max-h-60 overflow-y-auto mb-3">{cart.length===0? <p className="text-[11px] text-gray-400 text-center py-4">Cart empty - Fast billing on mobile ready</p> : cart.map((c)=>(<div key={c.cartId} className="flex justify-between text-[11px] border-b py-1.5"><span>{c.name} x{c.qty} @ {fmt(c.price)}</span><span className="flex gap-2"><b>Rs.{fmt(c.total)}</b><button type="button" onClick={()=>removeFromCart(c.cartId)} className="text-red-600">✕</button></span></div>))}</div>
+            <div className="space-y-1 max-h-60 overflow-y-auto mb-3">{cart.length===0? <p className="text-[11px] text-gray-400 text-center py-4">Scan barcode to add - Fast billing</p> : cart.map((c)=>(<div key={c.cartId} className="flex justify-between text-[11px] border-b py-1.5"><span>{c.name} x{c.qty} @ {fmt(c.price)}</span><span className="flex gap-2"><b>Rs.{fmt(c.total)}</b><button type="button" onClick={()=>removeFromCart(c.cartId)} className="text-red-600">✕</button></span></div>))}</div>
             <input ref={customerInputRef} value={customerName} onChange={(e)=>{ setCustomerName(e.target.value); if(e.target.value.trim().length>=2) setCustomerError(false); }} placeholder="Customer name for Udhar" className={`w-full border p-2 rounded-lg text-[12px] mb-2 ${customerError ? "border-red-500 bg-red-50 ring-2 ring-red-300" : ""}`} />
             {customerError && <p className="text-[10px] text-red-600 mb-2 font-bold">* Customer name required for Udhar</p>}
             <div className="flex bg-gray-100 rounded-lg p-1 mb-3"><button type="button" onClick={()=>{ setPaymentType("cash"); setCustomerError(false); }} className={`flex-1 py-1.5 rounded-md text-[11px] font-bold ${paymentType==="cash"?"bg-green-600 text-white":"text-gray-600"}`}>Cash</button><button type="button" onClick={()=>{ const name=customerName.trim(); if(name.length<2 || name.toLowerCase()==="walk-in"){ setCustomerError(true); alert("Customer name required!"); customerInputRef.current?.focus(); return; } setCustomerError(false); setPaymentType("credit"); }} className={`flex-1 py-1.5 rounded-md text-[11px] font-bold ${paymentType==="credit"?"bg-red-600 text-white":"text-gray-600"}`}>Udhar</button></div>

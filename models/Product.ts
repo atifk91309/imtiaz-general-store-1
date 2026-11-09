@@ -1,16 +1,17 @@
 import mongoose, { Schema, Document, Types } from "mongoose";
 
-export type ProductCategory = "mobile_accessories" | "manyari" | "cosmetics" | "other";
+export type ProductCategory = "mobile_accessories" | "manyari" | "cosmetics" | "other" | "general";
 export type StockMode = "limited" | "unlimited";
 
 export interface IProduct extends Document {
   name: string;
   category: ProductCategory;
   company?: string;
-  buyPriceAvg: number; // Asad: your main buy price
+  buyPriceAvg: number;
   sellPrice: number;
   stock: number;
   stockMode: StockMode;
+  barcode?: string;
   userId: Types.ObjectId;
   localId?: string;
   synced?: boolean;
@@ -23,8 +24,8 @@ const ProductSchema = new Schema<IProduct>({
   name: { type: String, required: true, trim: true, index: true },
   category: { 
     type: String, 
-    enum: ["mobile_accessories","manyari","cosmetics","other"], 
-    default: "mobile_accessories", 
+    enum: ["mobile_accessories","manyari","cosmetics","other","general"], 
+    default: "general", 
     index: true 
   },
   company: { type: String, default: "", trim: true },
@@ -35,6 +36,13 @@ const ProductSchema = new Schema<IProduct>({
     type: String, 
     enum: ["limited","unlimited"], 
     default: "limited",
+    index: true 
+  },
+  barcode: { 
+    type: String, 
+    default: undefined, 
+    trim: true, 
+    sparse: true,
     index: true 
   },
   userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
@@ -51,8 +59,9 @@ const ProductSchema = new Schema<IProduct>({
 ProductSchema.index({ userId: 1, category: 1, createdAt: -1 });
 ProductSchema.index({ userId: 1, stock: 1 });
 ProductSchema.index({ userId: 1, name: 1 });
+ProductSchema.index({ userId: 1, barcode: 1 }, { sparse: true });
 
-// Virtuals - whole rupees
+// Virtuals
 ProductSchema.virtual("profit").get(function(this: IProduct){
   return Math.round((this.sellPrice || 0) - (this.buyPriceAvg || 0));
 });
@@ -67,7 +76,6 @@ ProductSchema.virtual("totalSellValue").get(function(this: IProduct){
   return Math.round((this.stock || 0) * (this.sellPrice || 0));
 });
 
-// For backward compat if some API sends buyPrice
 ProductSchema.virtual("buyPrice").get(function(this: IProduct){
   return this.buyPriceAvg;
 }).set(function(this: IProduct, v: number){
@@ -80,6 +88,15 @@ ProductSchema.pre("save", function() {
   }
   this.buyPriceAvg = Math.round(this.buyPriceAvg || 0);
   this.sellPrice = Math.round(this.sellPrice || 0);
+  
+  if (this.barcode !== undefined && this.barcode !== null) {
+    const trimmed = this.barcode.trim();
+    if (trimmed === "") {
+      this.barcode = undefined;
+    } else {
+      this.barcode = trimmed;
+    }
+  }
 });
 
 export default mongoose.models.Product || mongoose.model<IProduct>("Product", ProductSchema);

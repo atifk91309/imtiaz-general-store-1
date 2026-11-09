@@ -4,7 +4,7 @@ import Link from "next/link";
 import { offlineDB } from "@/lib/offline-db";
 import type { OfflineSale } from "@/lib/offline-db";
 
-type Category = "mobile_accessories" | "manyari" | "cosmetics" | "other";
+type Category = "mobile_accessories" | "manyari" | "cosmetics" | "other" | "general";
 type Sale = {
   _id: string;
   productName: string;
@@ -17,6 +17,7 @@ type Sale = {
   customerName?: string;
   status?: string;
   paymentType?: string;
+  barcode?: string;
 };
 type FilterType = "today" | "weekly" | "monthly" | "all";
 type Pagination = { page: number; totalPages: number; hasMore: boolean; totalCount: number };
@@ -32,6 +33,10 @@ function useIsOnline(){
   return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 }
 function rnd(n:number){ return Math.round(n||0); }
+function toCat(c: string | undefined): Category {
+  if(c==="mobile_accessories" || c==="manyari" || c==="cosmetics" || c==="other" || c==="general") return c;
+  return "general";
+}
 
 const PKT_OFFSET_MS = 5 * 60 * 60 * 1000;
 function isInFilter(dateStr: string, filter: string): boolean {
@@ -77,7 +82,7 @@ export default function SalesHistoryPage() {
         });
         const paged = filtered.slice((p-1)*20, p*20);
         setSales(paged.map((o: OfflineSale)=>({ 
-          _id:o.localId, productName:o.productName, category:(o.category as Category)||"other", 
+          _id:o.localId, productName:o.productName, category:toCat(o.category), 
           quantity:o.quantity, sellPrice:o.sellPrice, total:o.total, profit:o.profit, 
           createdAt:o.createdAt, customerName:o.customerName, status:o.status, paymentType:o.paymentType 
         })));
@@ -85,16 +90,14 @@ export default function SalesHistoryPage() {
         const pr = filtered.reduce((a,b)=>a+b.profit,0);
         setTotal(rnd(t)); setProfit(rnd(pr));
         setPagination({ page:p, totalPages: Math.ceil(filtered.length/20), hasMore: filtered.length > p*20, totalCount: filtered.length });
-        // offline pending total
         const pendingOffline = all.filter(o=> (o.paymentType==="credit"||o.status==="pending") && isInFilter(o.createdAt, f)).reduce((a,b)=>a+b.total,0);
         setPendingTotal(rnd(pendingOffline));
         return;
       }
-      // FIX: map pending->credit, paid->cash, all->omit
       const statusQ = status==="pending" ? "&paymentType=credit" : status==="paid" ? "&paymentType=cash" : "";
       const res = await fetch(`/api/sales?filter=${f}&search=${encodeURIComponent(s)}&page=${p}&limit=20${statusQ}`);
       const data = (await res.json()) as SalesApiResponse;
-      if(p===1) setSales(data.sales); else setSales(prev=>[...prev,...data.sales]);
+      if(p===1) setSales(data.sales.map(s=> ({ ...s, category: toCat(s.category) }))); else setSales(prev=>[...prev,...data.sales.map(s=> ({ ...s, category: toCat(s.category) }))]);
       setTotal(rnd(data.total)); setProfit(rnd(data.profit)); setPagination(data.pagination);
 
       try{
@@ -121,7 +124,7 @@ export default function SalesHistoryPage() {
   sales.forEach(s=>{ 
     const d = new Date(s.createdAt);
     const pkt = new Date(d.getTime() + PKT_OFFSET_MS);
-    const key = pkt.toISOString().slice(0,10); // YYYY-MM-DD PKT
+    const key = pkt.toISOString().slice(0,10);
     if(!grouped[key]) grouped[key]=[]; 
     grouped[key].push(s); 
   });
@@ -139,7 +142,7 @@ export default function SalesHistoryPage() {
       <div className="bg-white p-3 rounded-xl border mb-4 flex flex-col gap-2">
         <div className="flex gap-1.5 overflow-x-auto">{FILTERS.map(f=><button key={f} onClick={()=>{setFilter(f); setPage(1);}} className={`px-3 py-1.5 rounded-full text-[11px] capitalize ${filter===f?"bg-black text-white":"bg-gray-100"}`}>{f}</button>)}</div>
         <div className="flex gap-1.5"><button onClick={()=>{setStatusFilter("all"); setPage(1);}} className={`px-3 py-1.5 rounded-full text-[11px] ${statusFilter==="all"?"bg-black text-white":"bg-gray-100"}`}>All</button><button onClick={()=>{setStatusFilter("paid"); setPage(1);}} className={`px-3 py-1.5 rounded-full text-[11px] ${statusFilter==="paid"?"bg-green-600 text-white":"bg-gray-100"}`}>Cash</button><button onClick={()=>{setStatusFilter("pending"); setPage(1);}} className={`px-3 py-1.5 rounded-full text-[11px] ${statusFilter==="pending"?"bg-red-600 text-white":"bg-gray-100"}`}>Udhar</button></div>
-        <input placeholder="🔍 Search product / customer..." value={search} onChange={e=>{setSearch(e.target.value); setPage(1);}} className="border p-2.5 rounded-lg w-full text-[12px]" />
+        <input placeholder="🔍 Search product / customer / barcode..." value={search} onChange={e=>{setSearch(e.target.value); setPage(1);}} className="border p-2.5 rounded-lg w-full text-[12px]" />
       </div>
 
       {loading && page===1 ? <p className="text-center py-10 text-[12px]">Loading...</p> : (
@@ -152,7 +155,7 @@ export default function SalesHistoryPage() {
                 <div className="bg-gray-50 px-3 py-2 flex justify-between text-[11px] font-bold border-b"><span>{date} • {daySales.length} sales</span><span className="text-green-700">Rs.{rnd(dt)} <span className="text-blue-600">Profit +{rnd(dp)}</span></span></div>
                 {daySales.map(s=>(
                   <div key={s._id} className={`px-3 py-2.5 flex justify-between text-[12px] border-b last:border-0 ${s.status==="pending"?"bg-red-50/50":""}`}>
-                    <div><p className="font-medium">{s.productName} <span className="text-blue-600">x{s.quantity}</span> {s.customerName && s.customerName!=="Walk-in" ? <span className="bg-yellow-100 px-2 rounded-full text-[10px]">👤 {s.customerName}</span> : null} {s.status==="pending" ? <span className="bg-red-600 text-white px-2 rounded-full text-[9px]">UDHAR</span> : null}</p><p className="text-[10px] text-gray-400">Rs.{s.sellPrice}/pcs • Profit Rs.{s.profit} • {new Date(s.createdAt).toLocaleTimeString()} • {s.category}</p></div>
+                    <div><p className="font-medium">{s.productName} <span className="text-blue-600">x{s.quantity}</span> {s.customerName && s.customerName!=="Walk-in" ? <span className="bg-yellow-100 px-2 rounded-full text-[10px]">👤 {s.customerName}</span> : null} {s.status==="pending" ? <span className="bg-red-600 text-white px-2 rounded-full text-[9px]">UDHAR</span> : null} <span className="text-[9px] bg-gray-100 px-1 rounded ml-1">{s.category}</span></p><p className="text-[10px] text-gray-400">Rs.{s.sellPrice}/pcs • Profit Rs.{s.profit} • {new Date(s.createdAt).toLocaleTimeString()} • {s.category}</p></div>
                     <span className="font-bold">Rs.{s.total}</span>
                   </div>
                 ))}

@@ -1,5 +1,5 @@
 import { offlineDB, calcProfit, calcTotal } from "./offline-db";
-import type { OfflineSale, OfflineEasypaisa, EasyType, SaleCategory, SyncQueueItem, OfflinePayload } from "./offline-db";
+import type { OfflineSale, OfflineEasypaisa, EasyType, SaleCategory, SyncQueueItem, OfflinePayload, WusoolSyncPayload } from "./offline-db";
 
 export interface SaleInput {
   productId: string;
@@ -38,6 +38,10 @@ type SyncableRegistration = ServiceWorkerRegistration & {
   sync?: { register: (tag: string) => Promise<void> };
 };
 
+function isWusoolPayload(payload: OfflinePayload): payload is WusoolSyncPayload {
+  return typeof payload === "object" && payload !== null && "amount" in payload && "date" in payload && !("productId" in payload);
+}
+
 export async function saveSaleOffline(data: SaleInput): Promise<string> {
   const buy = rnd(data.buyPriceAvg || data.buyPrice || 0);
   const sell = rnd(data.sellPrice || 0);
@@ -69,9 +73,11 @@ export async function saveSaleOffline(data: SaleInput): Promise<string> {
           const newStock = rnd(product.stock - qty);
           await offlineDB.products.update(product.localId, { stock: newStock < 0 ? 0 : newStock, synced: 0 });
         }
-      } catch {}
+      } catch {
+        // ignore stock update error, still save sale
+      }
       await offlineDB.sales.put(sale);
-      await offlineDB.syncQueue.put({ type: "sale", localId, payload: sale as OfflinePayload, createdAt: new Date(), attempts: 0 });
+      await offlineDB.syncQueue.put({ type: "sale", localId, payload: sale, createdAt: new Date(), attempts: 0 });
       if (isCredit && data.customerName && data.customerName.toLowerCase() !== "walk-in") {
         const normalized = data.customerName.trim().toLowerCase();
         const existing = await offlineDB.customers.where("normalizedName").equals(normalized).first();
@@ -97,14 +103,16 @@ export async function saveSaleOffline(data: SaleInput): Promise<string> {
   } catch (e) {
     console.warn("saveSaleOffline fallback", e);
     await offlineDB.sales.put(sale);
-    await offlineDB.syncQueue.put({ type: "sale", localId, payload: sale as OfflinePayload, createdAt: new Date(), attempts: 0 });
+    await offlineDB.syncQueue.put({ type: "sale", localId, payload: sale, createdAt: new Date(), attempts: 0 });
   }
 
   if (typeof window !== "undefined" && "serviceWorker" in navigator) {
     try {
       const reg = (await navigator.serviceWorker.ready) as SyncableRegistration;
       if (reg.sync) await reg.sync.register("sync-sales");
-    } catch {}
+    } catch {
+      // ignore
+    }
   }
   return localId;
 }
@@ -127,7 +135,7 @@ export async function saveEasypaisaOffline(data: EasypaisaInput): Promise<string
   await offlineDB.syncQueue.put({
     type: "easypaisa",
     localId,
-    payload: entry as OfflinePayload,
+    payload: entry,
     createdAt: new Date(),
     attempts: 0,
   } as SyncQueueItem);
@@ -153,7 +161,9 @@ export async function syncOfflineSales(): Promise<{ synced: number }> {
         await offlineDB.syncQueue.where("localId").equals(s.localId).delete();
         synced++;
       }
-    } catch {}
+    } catch {
+      // network error, keep for next try
+    }
   }
   return { synced };
 }
@@ -163,9 +173,8 @@ export async function syncAllOffline(): Promise<{ sales: number; easypaisa: numb
   
   const salesResult = await syncOfflineSales();
   
-  // Easypaisa
-  const easy = await offlineDB.easypaisa.where("synced").equals(0).toArray();
   let easySynced = 0;
+  const easy = await offlineDB.easypaisa.where("synced").equals(0).toArray();
   for (const e of easy) {
     try {
       const res = await fetch("/api/easypaisa", {
@@ -181,32 +190,37 @@ export async function syncAllOffline(): Promise<{ sales: number; easypaisa: numb
         await offlineDB.syncQueue.where("localId").equals(e.localId).delete();
         easySynced++;
       }
-    } catch {}
+    } catch {
+      // keep
+    }
   }
 
-  // Wusool - FIX: sync wusool too
   let wusoolSynced = 0;
   const wusoolQueue = await offlineDB.syncQueue.where("type").equals("wusool").toArray();
   for (const q of wusoolQueue) {
     try {
-      const payload = q.payload as { amount: number; note?: string; date: string; customerLocalId?: string };
-      const cust = payload.customerLocalId ? await offlineDB.customers.get(payload.customerLocalId) : null;
+      if (!isWusoolPayload(q.payload)) continue;
+      const cust = q.payload.customerLocalId ? await offlineDB.customers.get(q.payload.customerLocalId) : null;
       const customerName = cust?.name || "";
       if (!customerName) continue;
       const res = await fetch("/api/customers/wusool", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           customerName,
-          amount: payload.amount,
-          note: payload.note || "",
+          amount: q.payload.amount,
+          note: q.payload.note || "",
           localId: q.localId,
         }),
       });
       if (res.ok) {
-        await offlineDB.syncQueue.delete(q.id as number);
+        if (q.id !== undefined) {
+          await offlineDB.syncQueue.delete(q.id);
+        }
         wusoolSynced++;
       }
-    } catch {}
+    } catch {
+      // keep
+    }
   }
 
   return { sales: salesResult.synced, easypaisa: easySynced, wusool: wusoolSynced };

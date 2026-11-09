@@ -10,6 +10,8 @@ import { Types } from "mongoose";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
+type SaleCategory = "mobile_accessories" | "manyari" | "cosmetics" | "other" | "general";
+
 type SaleBody = {
   productId: string;
   quantity: number;
@@ -20,7 +22,7 @@ type SaleBody = {
   phone?: string;
   village?: string;
   paymentType?: "cash" | "credit" | "udhar";
-  category?: "mobile_accessories" | "manyari" | "cosmetics" | "other";
+  category?: SaleCategory;
   productName?: string;
   localId?: string;
   userId?: string;
@@ -30,7 +32,6 @@ function rnd(n: number): number {
   return Math.round(Number(n) || 0);
 }
 
-// PKT fixed - Asad shop timezone
 function getDateRange(filter: string): { start: Date; end: Date } | null {
   if (filter === "all") return null;
   const now = new Date();
@@ -40,17 +41,7 @@ function getDateRange(filter: string): { start: Date; end: Date } | null {
   const startToday = new Date(Date.UTC(y, m, d, 0, 0, 0, 0) - pktOffset);
   const endToday = new Date(Date.UTC(y, m, d + 1, 0, 0, 0, 0) - pktOffset);
   
-  const start = new Date(startToday);
-  const end = new Date(endToday);
-  
-  if (filter === "today") {
-    // startToday - endToday
-  } else if (filter === "yesterday") {
-    start.setDate(start.getDate() - 1);
-    start.setHours(0,0,0,0);
-    end.setDate(end.getDate() - 1);
-    end.setHours(0,0,0,0);
-    // adjust for PKT
+  if (filter === "yesterday") {
     const s = new Date(Date.UTC(y, m, d-1, 0, 0, 0, 0) - pktOffset);
     const e = new Date(Date.UTC(y, m, d, 0, 0, 0, 0) - pktOffset);
     return { start: s, end: e };
@@ -104,7 +95,6 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     }
     if (category && category !== "all") q.category = category;
     
-    // FIX: map udhar -> credit, ignore all
     if (rawPaymentType && rawPaymentType !== "all") {
       const mapped = rawPaymentType === "udhar" ? "credit" : rawPaymentType;
       if (mapped === "cash" || mapped === "credit") {
@@ -163,14 +153,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
 
     let productName = body.productName || "Product";
-    let productCategory = body.category || "other";
+    let productCategory: SaleCategory = body.category || "general";
 
     try {
       if (Types.ObjectId.isValid(body.productId)) {
         const product = await Product.findOne({ _id: body.productId, userId });
         if (product) {
           productName = product.name;
-          productCategory = product.category as typeof productCategory;
+          productCategory = product.category as SaleCategory;
           const qty = rnd(body.quantity);
           if (product.stockMode === "limited" && product.stock < qty) {
             return NextResponse.json({ error: `Only ${product.stock} pcs left for ${product.name}` }, { status: 400 });
@@ -181,7 +171,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           }
         }
       }
-    } catch {}
+    } catch {
+      // ignore product lookup error
+    }
 
     const qty = rnd(body.quantity);
     const sellPrice = rnd(body.sellPrice || 0);

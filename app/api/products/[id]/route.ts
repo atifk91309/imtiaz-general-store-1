@@ -10,15 +10,18 @@ export const runtime = "nodejs";
 
 type Params = { params: Promise<{ id: string }> };
 
+type ProductCategory = "mobile_accessories" | "manyari" | "cosmetics" | "other" | "general";
+
 type ProductUpdateBody = {
   name?: string;
-  category?: "mobile_accessories" | "manyari" | "cosmetics" | "other";
+  category?: ProductCategory;
   company?: string;
   buyPrice?: number;
   buyPriceAvg?: number;
   sellPrice?: number;
   stock?: number;
   stockMode?: "limited" | "unlimited";
+  barcode?: string;
 };
 
 type ProductUpdateData = {
@@ -31,6 +34,7 @@ type ProductUpdateData = {
   sellPrice?: number;
   stock?: number;
   stockMode?: string;
+  barcode?: string | null;
 };
 
 function isValidObjectId(id: string): boolean {
@@ -66,7 +70,6 @@ export async function PUT(req: NextRequest, { params }: Params): Promise<NextRes
     const userId = new Types.ObjectId(session.user.id);
     const body = (await req.json()) as ProductUpdateBody;
 
-    // FIX: Use buyPriceAvg — schema has no buyPrice field
     const updateData: ProductUpdateData = { lastSyncedAt: new Date(), synced: true };
     if (body.name?.trim()) updateData.name = body.name.trim();
     if (body.category) updateData.category = body.category;
@@ -77,10 +80,20 @@ export async function PUT(req: NextRequest, { params }: Params): Promise<NextRes
     if (body.sellPrice !== undefined) updateData.sellPrice = rnd(body.sellPrice);
     if (body.stock !== undefined) updateData.stock = rnd(body.stock);
     if (body.stockMode) updateData.stockMode = body.stockMode;
+    
+    // ✅ Barcode update — empty string = remove barcode
+    if (body.barcode !== undefined) {
+      const trimmed = body.barcode.trim();
+      if (trimmed === "") {
+        updateData.barcode = null;
+      } else {
+        updateData.barcode = trimmed;
+      }
+    }
 
     const updated = await Product.findOneAndUpdate(
       { _id: id, userId },
-      { $set: updateData },
+      { $set: updateData, $unset: updateData.barcode === null ? { barcode: "" } : {} },
       { new: true, runValidators: true }
     ).lean({ virtuals: true });
 

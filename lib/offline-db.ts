@@ -3,13 +3,13 @@ import Dexie, { type Table } from "dexie";
 export type WusoolHistoryEntry = { amount: number; date: string; note?: string };
 export type WusoolSyncPayload = { amount: number; note?: string; date: string; customerLocalId?: string };
 export type EasyType = "send" | "receive" | "bill" | "easyload" | "jazzcash" | "deposit" | "withdraw";
-export type SaleCategory = "mobile_accessories" | "manyari" | "cosmetics" | "other";
+export type SaleCategory = "mobile_accessories" | "manyari" | "cosmetics" | "other" | "general";
 
 export interface OfflineProduct {
   localId: string; _id?: string; name: string; category: SaleCategory;
   company?: string; buyPrice: number; buyPriceAvg: number; sellPrice: number;
-  stock: number; stockMode: "limited" | "unlimited"; userId: string;
-  synced: number; createdAt: string; lastSyncedAt?: string;
+  stock: number; stockMode: "limited" | "unlimited"; barcode?: string;
+  userId: string; synced: number; createdAt: string; lastSyncedAt?: string;
 }
 export interface OfflineSale {
   localId: string; _id?: string; productId: string; productName: string;
@@ -39,6 +39,8 @@ export interface SyncQueueItem {
 type LegacyProductForMigration = {
   buyPrice?: number;
   buyPriceAvg?: number;
+  barcode?: string;
+  category?: string;
 };
 
 function rnd(n: number): number { return Math.round(n || 0); }
@@ -88,6 +90,22 @@ export class OfflineDB extends Dexie {
       customers: "localId, _id, name, normalizedName, userId, synced, totalUdhar, isPaid, createdAt",
       easypaisa: "localId, _id, userId, synced, createdAt, type, customerName",
       syncQueue: "++id, type, localId, createdAt",
+    });
+
+    // ✅ V7: barcode + general category
+    this.version(7).stores({
+      products: "localId, _id, userId, synced, name, category, barcode, createdAt",
+      sales: "localId, _id, productId, userId, synced, createdAt, customerName, status, category, paymentType",
+      customers: "localId, _id, name, normalizedName, userId, synced, totalUdhar, isPaid, createdAt",
+      easypaisa: "localId, _id, userId, synced, createdAt, type, customerName",
+      syncQueue: "++id, type, localId, createdAt",
+    }).upgrade((tx) => {
+      return tx.table("products").toCollection().modify((p: LegacyProductForMigration) => {
+        if (!p.barcode) p.barcode = "";
+        if (p.category === "other" || !p.category) {
+          // keep as is, general will be new default going forward
+        }
+      });
     });
   }
 }
