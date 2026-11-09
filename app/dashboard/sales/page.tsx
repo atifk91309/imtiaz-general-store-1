@@ -61,6 +61,17 @@ export default function SalesPage(){
   const customerInputRef = useRef<HTMLInputElement>(null);
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(()=>{ setMounted(true); },[]);
+
+  // ✅ POS khulte hi Sale Page pe focus (Search pe nahi) - Auto Add enable
+  useEffect(()=>{
+    const t = setTimeout(()=>{
+      if(document.activeElement instanceof HTMLElement){
+        document.activeElement.blur();
+      }
+      document.getElementById("pos-main-page")?.focus();
+    }, 200);
+    return ()=> clearTimeout(t);
+  },[]);
   const refreshCounts = useCallback(async()=>{ try{ const c=await offlineDB.sales.where("synced").equals(0).count(); setPendingCount(c);}catch{} },[]);
   const syncPendingSales = useCallback(async()=>{
     try{
@@ -188,30 +199,45 @@ export default function SalesPage(){
     });
   },[paymentType, customerName, getFinalPrice]);
 
-  // ✅ Barcode scanner -> auto add to cart (mobile + desktop)
+      // ✅ SMART BARCODE: Focus = Manual, No Focus = Auto Add (ESLint safe)
   useEffect(()=>{
     if(products.length===0) return;
     let buffer = "";
     let lastTime = 0;
+    
     const tryAdd = (code:string)=>{
-      const found = products.find(p=> p.barcode && p.barcode===code);
-      if(found){
-        addToCart(found,1);
-        // feedback
-        try{ const a = new Audio(); }catch{}
-        searchRef.current?.blur();
-      } else {
-        // if not in current list, search
-        setProductSearch(code);
+      const cleanCode = code.trim();
+      const found = products.find(p=> p.barcode && p.barcode===cleanCode);
+      const isSearchFocused = document.activeElement === searchRef.current;
+
+      if(isSearchFocused){
+        setProductSearch(cleanCode);
         setProductPage(1);
+      } else {
+        if(found){
+          addToCart(found,1);
+          try{ navigator.vibrate?.(100); }catch{}
+        } else {
+          setProductSearch(cleanCode);
+          setProductPage(1);
+        }
       }
     };
-    const onKey = (e:KeyboardEvent)=>{
-      const t = e.target as HTMLElement;
-      if(t && t.tagName==="INPUT" && t!==searchRef.current) return;
+
+    const onKey = (e: KeyboardEvent)=>{
+      const target = e.target as HTMLElement | null;
+      if(target && target !== searchRef.current){
+        const tag = target.tagName;
+        if(tag === "TEXTAREA" || tag === "INPUT"){
+          // agar customer name input pe focus hai to scanner ignore karo
+          if(target === customerInputRef.current) return;
+        }
+      }
+      
       const now = Date.now();
       if(now-lastTime>300) buffer="";
       lastTime=now;
+      
       if(e.key==="Enter" && buffer.length>2){
         const code = buffer.trim();
         buffer="";
@@ -221,6 +247,7 @@ export default function SalesPage(){
         buffer+=e.key;
       }
     };
+    
     window.addEventListener("keypress", onKey);
     return ()=>window.removeEventListener("keypress", onKey);
   },[products, addToCart]);
@@ -246,7 +273,7 @@ export default function SalesPage(){
   },[cart, customerName, paymentType, refreshCounts, cartTotal, cartProfit, printBill]);
 
   return(
-    <div className="min-h-screen bg-gray-50 p-2 sm:p-4 max-w-7xl mx-auto">
+    <div id="pos-main-page" tabIndex={-1} className="min-h-screen bg-gray-50 p-2 sm:p-4 max-w-7xl mx-auto outline-none">
       <div className="flex flex-wrap justify-between gap-2 mb-3">
         <h1 className="font-bold text-[18px]">🛒 Imtiaz General Store - POS {isOffline?"📶 Offline":""} {printerConnected?`🖨️ ${printerName}`:""}</h1>
         <div className="flex gap-2">
@@ -265,7 +292,7 @@ export default function SalesPage(){
           </div>
             <select value={categoryFilter} onChange={(e)=>{setCategoryFilter(e.target.value); setProductPage(1);}} className="border p-2.5 rounded-xl bg-white text-[12px]"><option value="all">All</option><option value="general">🛒 General</option><option value="mobile_accessories">📱 Mobile</option><option value="manyari">💍 Manyari</option><option value="cosmetics">💄 Cosmetics</option><option value="other">Other</option></select>
           </div>
-          <p className="text-[10px] text-gray-500 mb-2">💡 Barcode scanner se scan karo — auto cart me add hoga (Mobile OTG + Desktop USB)</p>
+          <p className="text-[10px] text-gray-500 mb-2">💡 Search focused = Manual | Unfocused = Auto Add (Mobile OTG + Desktop USB)</p>
           <div className="flex justify-between items-center mb-2">
             <p className="text-[10px] text-gray-500">Showing {products.length}/{productPagination.totalCount}</p>
             {!isOffline && <button onClick={()=>void cacheAllProductsOnce()} className="text-[10px] bg-black text-white px-2 py-1 rounded-lg">Cache All for Offline</button>}
