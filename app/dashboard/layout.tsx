@@ -76,6 +76,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <Link href="/dashboard/customers" onClick={()=>setOpen(false)} className={linkClass("/dashboard/customers")}>📒 Khata / Udhar</Link>
           <Link href="/dashboard/sales/history" onClick={()=>setOpen(false)} className={linkClass("/dashboard/sales/history")}>📜 Sales History</Link>
           <Link href="/dashboard/sales/top" onClick={()=>setOpen(false)} className={linkClass("/dashboard/sales/top")}>🔥 Top Selling</Link>
+          <Link href="/dashboard/barcodes" onClick={()=>setOpen(false)} className={linkClass("/dashboard/barcodes")}>🏷️ Barcode Print</Link>
         </nav>
 
         <div className="mt-auto pt-4 border-t border-zinc-800">
