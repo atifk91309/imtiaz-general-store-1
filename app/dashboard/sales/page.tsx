@@ -61,13 +61,9 @@ export default function SalesPage(){
   const customerInputRef = useRef<HTMLInputElement>(null);
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(()=>{ setMounted(true); },[]);
-
-  // ✅ POS khulte hi Sale Page pe focus (Search pe nahi) - Auto Add enable
   useEffect(()=>{
     const t = setTimeout(()=>{
-      if(document.activeElement instanceof HTMLElement){
-        document.activeElement.blur();
-      }
+      if(document.activeElement instanceof HTMLElement){ document.activeElement.blur(); }
       document.getElementById("pos-main-page")?.focus();
     }, 200);
     return ()=> clearTimeout(t);
@@ -133,7 +129,15 @@ export default function SalesPage(){
       try{
         if(!navigator.onLine){
           const cached=await offlineDB.products.toArray();
-          const filtered=cached.filter((c)=>{ const s=productSearch.toLowerCase(); return (!s||c.name.toLowerCase().includes(s)|| (c.barcode && c.barcode.includes(productSearch))) && (categoryFilter==="all"||c.category===categoryFilter); });
+          // 🔥 OFFLINE FIX: Last 13 digits only
+          let cleanSearch = productSearch.trim();
+          if(cleanSearch.length > 15){
+            cleanSearch = cleanSearch.slice(-13);
+          }
+          const filtered=cached.filter((c)=>{ 
+            const s=cleanSearch.toLowerCase(); 
+            return (!s||c.name.toLowerCase().includes(s)|| (c.barcode && (c.barcode.includes(cleanSearch) || cleanSearch.includes(c.barcode)))) && (categoryFilter==="all"||c.category===categoryFilter); 
+          });
           const LIMIT = 20; const paged = filtered.slice(0, productPage * LIMIT);
           const mapped: Product[] = paged.map((c)=>({ _id:c._id||c.localId, name:c.name, category:toCat(c.category), buyPrice:c.buyPriceAvg||c.buyPrice, buyPriceAvg:c.buyPriceAvg||c.buyPrice, sellPrice:c.sellPrice, stock:c.stock, stockMode:c.stockMode||"limited", barcode: c.barcode }));
           if(!cancelled){ setProducts(mapped); setProductPagination({ page: productPage, totalPages: Math.ceil(filtered.length / LIMIT) || 1, hasMore: filtered.length > paged.length, totalCount: filtered.length }); }
@@ -174,7 +178,7 @@ export default function SalesPage(){
       }
     }catch{} finally{ setLoadingSales(false); }
   },[]);
-// eslint-disable-next-line react-hooks/set-state-in-effect
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(()=>{ void loadSales(filter,page); void refreshCounts(); void syncPendingSales(); },[filter,page,loadSales,refreshCounts,syncPendingSales]);
 
   const getFinalPrice = useCallback((p:Product) => {
@@ -199,14 +203,24 @@ export default function SalesPage(){
     });
   },[paymentType, customerName, getFinalPrice]);
 
-      // ✅ SMART BARCODE: Focus = Manual, No Focus = Auto Add (ESLint safe)
+  // ✅ FINAL: Focus = Search Only, Blur = Auto Add to Cart + Anti-concatenation
   useEffect(()=>{
     if(products.length===0) return;
     let buffer = "";
+    let bufferStartTime = 0;
     let lastTime = 0;
-    
-    const tryAdd = (code:string)=>{
-      const cleanCode = code.trim();
+    let lastScannedCode = "";
+    let lastScanTime = 0;
+
+    const tryAdd = (code:string, elapsed: number)=>{
+      const cleanCode = code.trim().slice(-13);
+      if(!cleanCode || cleanCode.length < 4) return;
+      if(elapsed > 800) return;
+      const now = Date.now();
+      if(cleanCode === lastScannedCode && (now - lastScanTime) < 1000) return;
+      lastScannedCode = cleanCode;
+      lastScanTime = now;
+
       const found = products.find(p=> p.barcode && p.barcode===cleanCode);
       const isSearchFocused = document.activeElement === searchRef.current;
 
@@ -217,6 +231,7 @@ export default function SalesPage(){
         if(found){
           addToCart(found,1);
           try{ navigator.vibrate?.(100); }catch{}
+          setProductSearch("");
         } else {
           setProductSearch(cleanCode);
           setProductPage(1);
@@ -224,32 +239,28 @@ export default function SalesPage(){
       }
     };
 
-    const onKey = (e: KeyboardEvent)=>{
-      const target = e.target as HTMLElement | null;
-      if(target && target !== searchRef.current){
-        const tag = target.tagName;
-        if(tag === "TEXTAREA" || tag === "INPUT"){
-          // agar customer name input pe focus hai to scanner ignore karo
-          if(target === customerInputRef.current) return;
-        }
-      }
-      
+    const onKeyDown = (e: KeyboardEvent)=>{
+      if((e.target as HTMLElement) === customerInputRef.current) return;
       const now = Date.now();
-      if(now-lastTime>300) buffer="";
-      lastTime=now;
-      
-      if(e.key==="Enter" && buffer.length>2){
-        const code = buffer.trim();
-        buffer="";
-        tryAdd(code);
-        e.preventDefault();
-      } else if(e.key.length===1){
-        buffer+=e.key;
+      if(now - lastTime > 500){ buffer = ""; bufferStartTime = now; }
+      lastTime = now;
+      if(e.key === "Enter"){
+        if(buffer.length >= 4){
+          const elapsed = now - bufferStartTime;
+          const code = buffer.trim();
+          buffer = "";
+          tryAdd(code, elapsed);
+          e.preventDefault();
+          e.stopPropagation();
+        } else { buffer = ""; }
+      } else if(e.key.length === 1){
+        if(buffer.length === 0) bufferStartTime = now;
+        buffer += e.key;
+        if(buffer.length > 30) buffer = buffer.slice(-30);
       }
     };
-    
-    window.addEventListener("keypress", onKey);
-    return ()=>window.removeEventListener("keypress", onKey);
+    window.addEventListener("keydown", onKeyDown);
+    return ()=> window.removeEventListener("keydown", onKeyDown);
   },[products, addToCart]);
 
   const removeFromCart=useCallback((cartId:string)=>setCart((prev)=>prev.filter((c)=>c.cartId!==cartId)), []);
@@ -287,12 +298,12 @@ export default function SalesPage(){
         <div className="lg:col-span-2">
           <div className="flex gap-2 mb-2">
             <div className="flex-1 relative">
-            <input ref={searchRef} value={productSearch} onChange={(e)=>{setProductSearch(e.target.value); setProductPage(1);}} placeholder="🔍 Scan barcode or name..." className="w-full border p-2.5 pr-10 rounded-xl bg-white text-[13px] outline-none focus:ring-2 focus:ring-black" />
+            <input ref={searchRef} value={productSearch} onFocus={(e)=> e.target.select()} onChange={(e)=>{ let val = e.target.value; if(val.length > 14 && val.length - productSearch.length > 8){ val = val.slice(-13); } setProductSearch(val); setProductPage(1);}} placeholder="🔍 Scan barcode or name..." className="w-full border p-2.5 pr-10 rounded-xl bg-white text-[13px] outline-none focus:ring-2 focus:ring-black" />
             {productSearch && (<button type="button" onClick={()=>{ setProductSearch(""); setProductPage(1); searchRef.current?.focus(); }} className="absolute right-2 top-1/2 -translate-y-1/2 bg-gray-200 hover:bg-black hover:text-white w-7 h-7 rounded-full flex items-center justify-center text-[12px] font-bold">✕</button>)}
           </div>
             <select value={categoryFilter} onChange={(e)=>{setCategoryFilter(e.target.value); setProductPage(1);}} className="border p-2.5 rounded-xl bg-white text-[12px]"><option value="all">All</option><option value="general">🛒 General</option><option value="mobile_accessories">📱 Mobile</option><option value="manyari">💍 Manyari</option><option value="cosmetics">💄 Cosmetics</option><option value="other">Other</option></select>
           </div>
-          <p className="text-[10px] text-gray-500 mb-2">💡 Search focused = Manual | Unfocused = Auto Add (Mobile OTG + Desktop USB)</p>
+          <p className="text-[10px] text-gray-500 mb-2">💡 Search focused = Manual | Unfocused = Auto Add</p>
           <div className="flex justify-between items-center mb-2">
             <p className="text-[10px] text-gray-500">Showing {products.length}/{productPagination.totalCount}</p>
             {!isOffline && <button onClick={()=>void cacheAllProductsOnce()} className="text-[10px] bg-black text-white px-2 py-1 rounded-lg">Cache All for Offline</button>}
