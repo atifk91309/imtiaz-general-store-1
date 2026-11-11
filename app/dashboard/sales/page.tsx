@@ -129,18 +129,17 @@ export default function SalesPage(){
       try{
         if(!navigator.onLine){
           const cached=await offlineDB.products.toArray();
-          // 🔥 OFFLINE FIX: Last 13 digits only
-          let cleanSearch = productSearch.trim();
-          if(cleanSearch.length > 15){
-            cleanSearch = cleanSearch.slice(-13);
-          }
+          const cleanSearch = productSearch.trim();
           const filtered=cached.filter((c)=>{ 
             const s=cleanSearch.toLowerCase(); 
-            return (!s||c.name.toLowerCase().includes(s)|| (c.barcode && (c.barcode.includes(cleanSearch) || cleanSearch.includes(c.barcode)))) && (categoryFilter==="all"||c.category===categoryFilter); 
+            if(!s) return true;
+            const bar = (c.barcode||"").toLowerCase();
+            return c.name.toLowerCase().includes(s) || bar === s || bar.includes(s) || s.includes(bar);
           });
-          const LIMIT = 20; const paged = filtered.slice(0, productPage * LIMIT);
+          const filteredByCat = categoryFilter==="all" ? filtered : filtered.filter(c=> c.category===categoryFilter);
+          const LIMIT = 20; const paged = filteredByCat.slice(0, productPage * LIMIT);
           const mapped: Product[] = paged.map((c)=>({ _id:c._id||c.localId, name:c.name, category:toCat(c.category), buyPrice:c.buyPriceAvg||c.buyPrice, buyPriceAvg:c.buyPriceAvg||c.buyPrice, sellPrice:c.sellPrice, stock:c.stock, stockMode:c.stockMode||"limited", barcode: c.barcode }));
-          if(!cancelled){ setProducts(mapped); setProductPagination({ page: productPage, totalPages: Math.ceil(filtered.length / LIMIT) || 1, hasMore: filtered.length > paged.length, totalCount: filtered.length }); }
+          if(!cancelled){ setProducts(mapped); setProductPagination({ page: productPage, totalPages: Math.ceil(filteredByCat.length / LIMIT) || 1, hasMore: filteredByCat.length > paged.length, totalCount: filteredByCat.length }); }
         } else {
           const res=await fetch(`/api/products?search=${encodeURIComponent(productSearch)}&category=${categoryFilter}&page=${productPage}&limit=20`);
           const data=(await res.json()) as ProductApiResponse; let list: Product[] = []; let pag: Pagination | undefined;
@@ -198,12 +197,18 @@ export default function SalesPage(){
     setCart((prev)=>{
       const totalQtyInCart = prev.filter((c)=>c.productId===p._id).reduce((s,c)=>s+c.qty,0);
       if(p.stockMode==="limited" && p.stock < totalQtyInCart + safeQty){ alert(`Only ${p.stock} left for ${p.name}`); return prev; }
+      const existingIndex = prev.findIndex(c=> c.productId===p._id && c.price===finalPrice);
+      if(existingIndex >= 0){
+        const updated = [...prev];
+        const ex = updated[existingIndex];
+        updated[existingIndex] = {...ex, qty: ex.qty + safeQty, total: rnd((ex.qty + safeQty)*ex.price)};
+        return updated;
+      }
       const newItem: CartItem = { cartId: `${p._id}_${Date.now()}_${Math.random().toString(36).slice(2,6)}`, productId: p._id, name: p.name, qty: safeQty, price: finalPrice, total: rnd(safeQty*finalPrice), category: p.category, buyPrice: p.buyPriceAvg, buyPriceAvg: p.buyPriceAvg, };
       return [...prev, newItem];
     });
   },[paymentType, customerName, getFinalPrice]);
 
-  // ✅ FINAL: Focus = Search Only, Blur = Auto Add to Cart + Anti-concatenation
   useEffect(()=>{
     if(products.length===0) return;
     let buffer = "";
@@ -211,19 +216,24 @@ export default function SalesPage(){
     let lastTime = 0;
     let lastScannedCode = "";
     let lastScanTime = 0;
-
+    const extractRealCode = (raw: string): string => {
+      const code = raw.trim();
+      if(!code) return "";
+      const suffixMatch = products.find(p => p.barcode && code.toLowerCase().endsWith(p.barcode.toLowerCase()));
+      if(suffixMatch?.barcode) return suffixMatch.barcode;
+      if(/^\d+$/.test(code) && code.length > 16) return code.slice(-13);
+      return code;
+    };
     const tryAdd = (code:string, elapsed: number)=>{
-      const cleanCode = code.trim().slice(-13);
-      if(!cleanCode || cleanCode.length < 4) return;
+      const cleanCode = extractRealCode(code);
+      if(!cleanCode || cleanCode.length < 2) return;
       if(elapsed > 800) return;
       const now = Date.now();
-      if(cleanCode === lastScannedCode && (now - lastScanTime) < 1000) return;
-      lastScannedCode = cleanCode;
+      if(cleanCode.toLowerCase() === lastScannedCode.toLowerCase() && (now - lastScanTime) < 1000) return;
+      lastScannedCode = cleanCode.toLowerCase();
       lastScanTime = now;
-
-      const found = products.find(p=> p.barcode && p.barcode===cleanCode);
+      const found = products.find(p=> p.barcode && p.barcode.toLowerCase() === cleanCode.toLowerCase());
       const isSearchFocused = document.activeElement === searchRef.current;
-
       if(isSearchFocused){
         setProductSearch(cleanCode);
         setProductPage(1);
@@ -238,14 +248,13 @@ export default function SalesPage(){
         }
       }
     };
-
     const onKeyDown = (e: KeyboardEvent)=>{
       if((e.target as HTMLElement) === customerInputRef.current) return;
       const now = Date.now();
       if(now - lastTime > 500){ buffer = ""; bufferStartTime = now; }
       lastTime = now;
       if(e.key === "Enter"){
-        if(buffer.length >= 4){
+        if(buffer.length >= 2){
           const elapsed = now - bufferStartTime;
           const code = buffer.trim();
           buffer = "";
@@ -256,7 +265,7 @@ export default function SalesPage(){
       } else if(e.key.length === 1){
         if(buffer.length === 0) bufferStartTime = now;
         buffer += e.key;
-        if(buffer.length > 30) buffer = buffer.slice(-30);
+        if(buffer.length > 50) buffer = buffer.slice(-50);
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -264,6 +273,17 @@ export default function SalesPage(){
   },[products, addToCart]);
 
   const removeFromCart=useCallback((cartId:string)=>setCart((prev)=>prev.filter((c)=>c.cartId!==cartId)), []);
+  const updateCartQty=useCallback((cartId:string, delta:number)=>{
+    setCart((prev)=>{
+      return prev.flatMap((c)=>{
+        if(c.cartId!==cartId) return [c];
+        const newQty = c.qty + delta;
+        if(newQty <= 0) return [];
+        return [{...c, qty: newQty, total: rnd(newQty * c.price)}];
+      });
+    });
+  },[]);
+
   const cartTotal=cart.reduce((s,c)=>s+c.total,0);
   const cartProfit=cart.reduce((s,c)=>s+rnd((c.price-c.buyPriceAvg)*c.qty),0);
 
@@ -298,7 +318,17 @@ export default function SalesPage(){
         <div className="lg:col-span-2">
           <div className="flex gap-2 mb-2">
             <div className="flex-1 relative">
-            <input ref={searchRef} value={productSearch} onFocus={(e)=> e.target.select()} onChange={(e)=>{ let val = e.target.value; if(val.length > 14 && val.length - productSearch.length > 8){ val = val.slice(-13); } setProductSearch(val); setProductPage(1);}} placeholder="🔍 Scan barcode or name..." className="w-full border p-2.5 pr-10 rounded-xl bg-white text-[13px] outline-none focus:ring-2 focus:ring-black" />
+            <input ref={searchRef} value={productSearch} 
+            onFocus={(e)=> e.target.select()} 
+            onChange={(e)=>{ 
+              let val = e.target.value;
+              if(val.length > 20){
+                const matched = products.find(p => p.barcode && val.toLowerCase().endsWith(p.barcode.toLowerCase()));
+                if(matched?.barcode) val = matched.barcode;
+              }
+              setProductSearch(val); 
+              setProductPage(1);
+            }} placeholder="🔍 Scan barcode or name..." className="w-full border p-2.5 pr-10 rounded-xl bg-white text-[13px] outline-none focus:ring-2 focus:ring-black" />
             {productSearch && (<button type="button" onClick={()=>{ setProductSearch(""); setProductPage(1); searchRef.current?.focus(); }} className="absolute right-2 top-1/2 -translate-y-1/2 bg-gray-200 hover:bg-black hover:text-white w-7 h-7 rounded-full flex items-center justify-center text-[12px] font-bold">✕</button>)}
           </div>
             <select value={categoryFilter} onChange={(e)=>{setCategoryFilter(e.target.value); setProductPage(1);}} className="border p-2.5 rounded-xl bg-white text-[12px]"><option value="all">All</option><option value="general">🛒 General</option><option value="mobile_accessories">📱 Mobile</option><option value="manyari">💍 Manyari</option><option value="cosmetics">💄 Cosmetics</option><option value="other">Other</option></select>
@@ -347,7 +377,17 @@ export default function SalesPage(){
         <div className="space-y-3">
           <div className="bg-white border rounded-xl p-3 sticky top-2">
             <div className="flex justify-between items-center mb-2"><p className="font-bold text-[13px]">🛒 Cart ({cart.length}) - Rs.{fmt(cartTotal)}</p><div className="flex gap-1"><button onClick={connectPrinter} className="text-[10px] bg-blue-50 text-blue-700 border border-blue-200 px-2 py-1 rounded-lg font-bold">{printerConnected?"🖨️ Connected":"🖨️ BT"}</button><button onClick={()=>{ if(cart.length>0) void printBill(cart, cartTotal, customerName); }} className="text-[10px] bg-black text-white px-2 py-1 rounded-lg font-bold">Print</button></div></div>
-            <div className="space-y-1 max-h-60 overflow-y-auto mb-3">{cart.length===0? <p className="text-[11px] text-gray-400 text-center py-4">Scan barcode to add - Fast billing</p> : cart.map((c)=>(<div key={c.cartId} className="flex justify-between text-[11px] border-b py-1.5"><span>{c.name} x{c.qty} @ {fmt(c.price)}</span><span className="flex gap-2"><b>Rs.{fmt(c.total)}</b><button type="button" onClick={()=>removeFromCart(c.cartId)} className="text-red-600">✕</button></span></div>))}</div>
+            <div className="space-y-1 max-h-60 overflow-y-auto mb-3">{cart.length===0? <p className="text-[11px] text-gray-400 text-center py-4">Scan barcode to add - Fast billing</p> : cart.map((c)=>(
+              <div key={c.cartId} className="flex justify-between items-center text-[11px] border-b py-1.5">
+                <span className="flex-1 truncate pr-2">{c.name} x{c.qty} @ {fmt(c.price)}</span>
+                <span className="flex items-center gap-1">
+                  <button type="button" onClick={()=>updateCartQty(c.cartId,-1)} className="w-6 h-6 bg-gray-100 hover:bg-black hover:text-white rounded-full font-bold">-</button>
+                  <b className="min-w-[42px] text-right">Rs.{fmt(c.total)}</b>
+                  <button type="button" onClick={()=>updateCartQty(c.cartId,1)} className="w-6 h-6 bg-gray-100 hover:bg-black hover:text-white rounded-full font-bold">+</button>
+                  <button type="button" onClick={()=>updateCartQty(c.cartId,-1)} title="1 kam karo" className="w-6 h-6 bg-red-50 text-red-600 hover:bg-red-600 hover:text-white rounded-full font-bold ml-1">✕</button>
+                </span>
+              </div>
+            ))}</div>
             <input ref={customerInputRef} value={customerName} onChange={(e)=>{ setCustomerName(e.target.value); if(e.target.value.trim().length>=2) setCustomerError(false); }} placeholder="Customer name for Udhar" className={`w-full border p-2 rounded-lg text-[12px] mb-2 ${customerError ? "border-red-500 bg-red-50 ring-2 ring-red-300" : ""}`} />
             {customerError && <p className="text-[10px] text-red-600 mb-2 font-bold">* Customer name required for Udhar</p>}
             <div className="flex bg-gray-100 rounded-lg p-1 mb-3"><button type="button" onClick={()=>{ setPaymentType("cash"); setCustomerError(false); }} className={`flex-1 py-1.5 rounded-md text-[11px] font-bold ${paymentType==="cash"?"bg-green-600 text-white":"text-gray-600"}`}>Cash</button><button type="button" onClick={()=>{ const name=customerName.trim(); if(name.length<2 || name.toLowerCase()==="walk-in"){ setCustomerError(true); alert("Customer name required!"); customerInputRef.current?.focus(); return; } setCustomerError(false); setPaymentType("credit"); }} className={`flex-1 py-1.5 rounded-md text-[11px] font-bold ${paymentType==="credit"?"bg-red-600 text-white":"text-gray-600"}`}>Udhar</button></div>
