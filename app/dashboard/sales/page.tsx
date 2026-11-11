@@ -284,6 +284,63 @@ export default function SalesPage(){
     });
   },[]);
 
+    // ✅ API CONNECTED WHOLESALER RETURN - ESLint Clean (no any)
+  const handleReturnSale = useCallback(async (sale: Sale) => {
+    const qtyStr = window.prompt(`Return / Wapas qty?\n${sale.productName} - Sold x${sale.quantity}\n1 se ${sale.quantity} tak:`, "1");
+    if(!qtyStr) return;
+    const parsed = parseInt(qtyStr,10);
+    if(Number.isNaN(parsed) || parsed <=0 || parsed > sale.quantity){ alert(`1 se ${sale.quantity} tak likho`); return; }
+    const retQty = parsed;
+    if(!confirm(`${sale.productName} x${retQty} return?\nStock wapas + Khata update hoga.`)) return;
+
+    const newQty = sale.quantity - retQty;
+    const returnTotal = rnd(sale.sellPrice * retQty);
+    const profitPerUnit = sale.quantity > 0 ? sale.profit / sale.quantity : 0;
+
+    try{
+      if(sale._id.startsWith("local_")){
+        const all = await offlineDB.sales.toArray();
+        const found = all.find(s=> s.localId === sale._id);
+        if(found){
+          if(newQty===0) await offlineDB.sales.delete(found.localId);
+          else await offlineDB.sales.update(found.localId, { quantity: newQty, total: found.total - returnTotal });
+        }
+      } else {
+        let res: Response;
+        if(newQty === 0){
+          res = await fetch(`/api/sales/${sale._id}`, { method: "DELETE" });
+        } else {
+          res = await fetch(`/api/sales/${sale._id}`, { method: "PUT", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ quantity: newQty }) });
+        }
+        const data = (await res.json()) as { error?: string };
+        if(!res.ok){
+          throw new Error(data.error || "Return failed");
+        }
+        try{
+          const all = await offlineDB.sales.toArray();
+          const found = all.find(s=> s.localId === sale._id);
+          if(found){
+            if(newQty===0) await offlineDB.sales.delete(found.localId);
+            else await offlineDB.sales.update(found.localId, { quantity: newQty, total: newQty * sale.sellPrice });
+          }
+        }catch{}
+      }
+
+      setProducts(prev=> prev.map(p=> p._id === sale.productId ? {...p, stock: p.stockMode==="limited" ? p.stock + retQty : p.stock} : p));
+      setSales(prev=>{
+        if(newQty===0) return prev.filter(s=> s._id !== sale._id);
+        return prev.map(s=> s._id===sale._id ? {...s, quantity: newQty, total: s.total - returnTotal, profit: s.profit - rnd(profitPerUnit * retQty)} : s);
+      });
+      setAllSalesTotal(t=> Math.max(0, t - returnTotal));
+      setAllSalesProfit(t=> Math.max(0, t - rnd(profitPerUnit * retQty)));
+      alert(`✅ Return OK: ${sale.productName} x${retQty} = Rs.${returnTotal}\nStock + Khata updated`);
+      await refreshCounts();
+    }catch(err: unknown){
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      alert(`❌ Return failed: ${msg}`);
+    }
+  },[refreshCounts]);
+
   const cartTotal=cart.reduce((s,c)=>s+c.total,0);
   const cartProfit=cart.reduce((s,c)=>s+rnd((c.price-c.buyPriceAvg)*c.qty),0);
 
@@ -333,7 +390,7 @@ export default function SalesPage(){
           </div>
             <select value={categoryFilter} onChange={(e)=>{setCategoryFilter(e.target.value); setProductPage(1);}} className="border p-2.5 rounded-xl bg-white text-[12px]"><option value="all">All</option><option value="general">🛒 General</option><option value="mobile_accessories">📱 Mobile</option><option value="manyari">💍 Manyari</option><option value="cosmetics">💄 Cosmetics</option><option value="other">Other</option></select>
           </div>
-          <p className="text-[10px] text-gray-500 mb-2">💡 Search focused = Manual | Unfocused = Auto Add</p>
+          <p className="text-[10px] text-gray-500 mb-2">💡 Search focused = Manual | Unfocused = Auto Add • Cart x3→x2 • Return API connected</p>
           <div className="flex justify-between items-center mb-2">
             <p className="text-[10px] text-gray-500">Showing {products.length}/{productPagination.totalCount}</p>
             {!isOffline && <button onClick={()=>void cacheAllProductsOnce()} className="text-[10px] bg-black text-white px-2 py-1 rounded-lg">Cache All for Offline</button>}
@@ -396,7 +453,15 @@ export default function SalesPage(){
           </div>
           <div className="bg-white border rounded-xl overflow-hidden">
             <div className="flex gap-1 p-2 border-b bg-gray-50 overflow-x-auto">{(["today","weekly","monthly","all"] as const).map((f)=><button type="button" key={f} onClick={()=>{setFilter(f); setPage(1);}} className={`px-3 py-1 rounded-full text-[10px] font-bold capitalize ${filter===f?"bg-green-600 text-white":"bg-white border"}`}>{f}</button>)}</div>
-            {loadingSales ? <p className="p-4 text-center text-[11px]">Loading sales... {pagination.totalCount} total</p> : <div>{sales.map((s)=>(<div key={s._id} className={`p-2 border-b flex justify-between text-[11px] ${s.status==="pending"?"bg-red-50":""}`}><div><b>{s.productName}</b> x{s.quantity} @ Rs.{fmt(s.sellPrice)}{s.customerName && s.customerName!=="Walk-in"?` 👤${s.customerName}`:""}<div className="text-[9px] text-gray-500">{new Date(s.createdAt).toLocaleTimeString()} • Profit {fmt(s.profit)}</div></div><div className="text-right"><div className="font-bold">Rs.{fmt(s.total)}</div><div className={`text-[9px] ${s.status==="pending"?"text-red-600":"text-green-600"}`}>{s.status==="pending"?"UDHAR":"Paid"}</div></div></div>))}{pagination.hasMore && <button type="button" onClick={()=>setPage((p)=>p+1)} className="w-full py-2 text-[11px] bg-gray-50">Load More Sales - Page {pagination.page}/{pagination.totalPages}</button>}{sales.length===0 && !loadingSales && <p className="p-4 text-center text-[11px] text-gray-400">No sales for {filter}</p>}</div>}
+            {loadingSales ? <p className="p-4 text-center text-[11px]">Loading sales... {pagination.totalCount} total</p> : <div>{sales.map((s)=>(
+              <div key={s._id} className={`p-2 border-b flex justify-between text-[11px] ${s.status==="pending"?"bg-red-50":""}`}>
+                <div><b>{s.productName}</b> x{s.quantity} @ Rs.{fmt(s.sellPrice)}{s.customerName && s.customerName!=="Walk-in"?` 👤${s.customerName}`:""}<div className="text-[9px] text-gray-500">{new Date(s.createdAt).toLocaleTimeString()} • Profit {fmt(s.profit)}</div></div>
+                <div className="text-right flex gap-2 items-center">
+                  <div><div className="font-bold">Rs.{fmt(s.total)}</div><div className={`text-[9px] ${s.status==="pending"?"text-red-600":"text-green-600"}`}>{s.status==="pending"?"UDHAR":"Paid"}</div></div>
+                  <button type="button" onClick={()=> handleReturnSale(s)} className="bg-orange-100 text-orange-700 border border-orange-300 px-2 py-1.5 rounded-lg text-[9px] font-bold hover:bg-orange-600 hover:text-white">↩ Return</button>
+                </div>
+              </div>
+            ))}{pagination.hasMore && <button type="button" onClick={()=>setPage((p)=>p+1)} className="w-full py-2 text-[11px] bg-gray-50">Load More Sales - Page {pagination.page}/{pagination.totalPages}</button>}{sales.length===0 && !loadingSales && <p className="p-4 text-center text-[11px] text-gray-400">No sales for {filter}</p>}</div>}
           </div>
         </div>
       </div>
