@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState, useCallback, useSyncExternalStore, useRef } from "react";
-import { offlineDB } from "@/lib/offline-db";
+import { offlineDB, savePendingProductDelete } from "@/lib/offline-db";
 import type { OfflineProduct } from "@/lib/offline-db";
 import { getOfflineUser } from "@/lib/offline-auth";
 
@@ -66,14 +66,13 @@ export default function ProductsPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // ✅ Universal scanner listener - Mobile + Desktop (USB OTG + Bluetooth)
+  // ✅ Universal scanner listener
   useEffect(()=>{
     let buffer = "";
     let lastTime = 0;
     const onKey = (e: KeyboardEvent)=>{
       const target = e.target as HTMLElement;
       if(target && (target.tagName==="INPUT" || target.tagName==="TEXTAREA")) {
-        // allow if search input focused, but still capture Enter for barcode
         if(target !== searchInputRef.current) return;
       }
       const now = Date.now();
@@ -99,8 +98,11 @@ export default function ProductsPage() {
     setPage(1);
     if (typeof window !== "undefined" && !window.navigator.onLine) {
       const cached = await offlineDB.products.toArray();
+      const deleted = await offlineDB.pendingProductDeletes.toArray();
+      const delSet = new Set(deleted.flatMap(d=>[d.productId, d.localId]));
       const searchLower = currentSearch.toLowerCase();
       const filtered = cached.filter((c) => {
+        if(delSet.has(c._id||"") || delSet.has(c.localId)) return false;
         const matchSearch = !currentSearch || c.name.toLowerCase().includes(searchLower) || (c.barcode && c.barcode.includes(currentSearch));
         const matchCat = cat === "all" || c.category === cat;
         return matchSearch && matchCat;
@@ -165,6 +167,8 @@ export default function ProductsPage() {
   const syncPendingProducts = useCallback(async () => {
     if (typeof window === "undefined" || !window.navigator.onLine) return;
     const pending = await offlineDB.products.where("synced").equals(0).toArray();
+    const pendingDel = await offlineDB.pendingProductDeletes.where("synced").equals(0).toArray();
+    setPendingCount(pending.length + pendingDel.length);
     if (pending.length === 0) return;
     setSyncing(true);
     let synced = 0;
@@ -206,10 +210,14 @@ export default function ProductsPage() {
       else setLoadingMore(true);
       try {
         const cached = await offlineDB.products.toArray();
-        setPendingCount(cached.filter((c) => c.synced === 0).length);
+        const deleted = await offlineDB.pendingProductDeletes.toArray();
+        const pendingProd = cached.filter((c) => c.synced === 0).length;
+        setPendingCount(pendingProd + deleted.length);
         if (typeof window !== "undefined" && !window.navigator.onLine) {
+          const delSet = new Set(deleted.flatMap(d=>[d.productId, d.localId]));
           const searchLower = currentSearch.toLowerCase();
           const filtered = cached.filter((c) => {
+            if(delSet.has(c._id||"") || delSet.has(c.localId)) return false;
             const matchSearch = !currentSearch || c.name.toLowerCase().includes(searchLower) || (c.barcode && c.barcode.includes(currentSearch));
             const matchCat = cat === "all" || c.category === cat;
             return matchSearch && matchCat;
@@ -348,20 +356,49 @@ export default function ProductsPage() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
+  // ✅ FINAL DELETE - Online + Offline both
   const handleDelete = async (id: string) => {
-    if (!window.confirm("Delete this product?")) return;
+    if (!window.confirm("Delete this product? Offline + Online dono se delete hoga.")) return;
     setDeletingId(id);
     try {
+      // 1. hamesha local cache se hatao
+      try{
+        await offlineDB.products.where('_id').equals(id).delete();
+        await offlineDB.products.where('localId').equals(id).delete();
+      }catch{}
+
       if (id.startsWith("local_")) {
         await offlineDB.products.delete(id);
+        // local product ka koi server delete nahi chahiye
+        setProducts(prev => prev.filter(p=> p._id !== id));
         setPendingCount((c) => Math.max(0, c - 1));
-        await refreshAfterAction(search, categoryFilter);
         return;
       }
-      await fetch(`/api/products/${id}`, { method: "DELETE" });
-      await refreshAfterAction(search, categoryFilter);
+
+      if(!navigator.onLine){
+        // offline delete queue
+        await savePendingProductDelete(id, id);
+        setProducts(prev => prev.filter(p=> p._id !== id));
+        setPendingCount(c=> c+1);
+        alert("📶 Offline Deleted - Online aate hi server se bhi delete hoga");
+        return;
+      }
+
+      // online delete
+      const res = await fetch(`/api/products/${id}`, { method: "DELETE" });
+      if(res.ok || res.status === 404){
+        // pending queue se bhi saaf karo agar pehle se tha
+        try{ await offlineDB.pendingProductDeletes.where('productId').equals(id).delete(); }catch{}
+        setProducts(prev => prev.filter(p=> p._id !== id));
+      } else {
+        // API fail to queue me dalo
+        await savePendingProductDelete(id, id);
+        setProducts(prev => prev.filter(p=> p._id !== id));
+      }
     } catch (err) {
       console.error(err);
+      await savePendingProductDelete(id, id);
+      setProducts(prev => prev.filter(p=> p._id !== id));
     } finally {
       setDeletingId(null);
     }

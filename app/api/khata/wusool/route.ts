@@ -14,9 +14,10 @@ type WusoolBody = {
   customerName?: string; 
   amount: number;
   note?: string;
+  localId?: string;
 };
 
-function rnd(n: number) { return Math.round((n || 0) * 100) / 100; }
+function rnd(n: number) { return Math.round(n || 0); }
 
 export async function POST(req: NextRequest) {
   try {
@@ -28,29 +29,54 @@ export async function POST(req: NextRequest) {
     const amount = rnd(Number(body.amount));
 
     if (!amount || amount <= 0) return NextResponse.json({ error: "Valid amount required" }, { status: 400 });
-    if (!body.customerId && !body.customerName) return NextResponse.json({ error: "customerId or customerName required" }, { status: 400 });
+    if (!body.customerId && !body.customerName && !body.localId) {
+      return NextResponse.json({ error: "customerId or customerName required" }, { status: 400 });
+    }
 
     const userId = new Types.ObjectId(session.user.id);
     
     let customer = null;
+
+    // ✅ 1. _id se dhoondo (online wala)
     if (body.customerId && Types.ObjectId.isValid(body.customerId)) {
-      // ✅ CHANGE: isPaid filter hata diya - pending hi milega but paid ko bhi handle kar sake
       customer = await Customer.findOne({ _id: body.customerId, userId });
-    } else {
-      const normalized = body.customerName!.trim().toLowerCase();
-      // ✅ Last pending khata lo, paid wala nahi
+    }
+
+    // ✅ 2. localId se dhoondo (offline wala)
+    if (!customer && (body.localId || body.customerId)) {
+      const local = body.localId || body.customerId;
+      customer = await Customer.findOne({ localId: local, userId });
+    }
+
+    // ✅ 3. name se dhoondo (offline sync wala)
+    if (!customer && body.customerName) {
+      const normalized = body.customerName.trim().toLowerCase();
       customer = await Customer.findOne({ normalizedName: normalized, userId, isPaid: false }).sort({ createdAt: -1 });
-      // agar pending na mile to last wala paid bhi check karo (galat wusool rokne ke liye)
+      
+      // Agar pending na mile aur last wala paid hai to already paid bolo
       if (!customer) {
         const lastCustomer = await Customer.findOne({ normalizedName: normalized, userId }).sort({ createdAt: -1 });
-        if (lastCustomer && lastCustomer.isPaid) {
-          return NextResponse.json({ error: "Khata already fully paid - Del option available" }, { status: 400 });
+        if (lastCustomer?.isPaid) {
+          // Offline sync ke liye success return karo taake queue clear ho jaye
+          return NextResponse.json({ 
+            success: true, 
+            alreadyPaid: true,
+            message: "Khata already paid" 
+          });
         }
       }
     }
 
     if (!customer) return NextResponse.json({ error: "Khata not found" }, { status: 404 });
-    if (customer.isPaid) return NextResponse.json({ error: "Khata already paid - use Del to remove" }, { status: 400 });
+
+    // ✅ Agar already paid hai to success return karo (offline queue clear karne ke liye)
+    if (customer.isPaid && customer.totalUdhar <= 0) {
+      return NextResponse.json({ 
+        success: true, 
+        alreadyPaid: true,
+        message: "Already fully paid" 
+      });
+    }
 
     const historyEntry = {
       amount,
@@ -60,10 +86,9 @@ export async function POST(req: NextRequest) {
 
     const newUdhar = rnd(customer.totalUdhar - amount);
 
-    if (newUdhar <= 0.01) {
-      // ✅ FULLY PAID - DELETE NAHI KARNA, SIRF PAID MARK KARNA
+    if (newUdhar <= 0) {
       customer.totalUdhar = 0;
-      customer.isPaid = true; // ab paid list me jayega, hide nahi hoga
+      customer.isPaid = true;
       customer.paidAmount = customer.totalBusiness;
       customer.paidAt = new Date();
       customer.lastWusoolDate = new Date();
@@ -73,7 +98,7 @@ export async function POST(req: NextRequest) {
       if (customer.saleIds?.length) {
         await Sale.updateMany(
           { _id: { $in: customer.saleIds }, userId },
-          { $set: { status: "paid", paymentType: "cash", isCredit: false } }
+          { $set: { status: "paid", paymentType: "cash" } }
         );
       }
 
@@ -83,10 +108,9 @@ export async function POST(req: NextRequest) {
         extra: rnd(Math.abs(newUdhar)),
         customer,
         wusool: historyEntry,
-        message: "All udhar received - Khata Paid, Del option now available"
+        message: "All udhar received - Khata Paid"
       });
     } else {
-      // Partial wusool
       customer.totalUdhar = newUdhar;
       customer.paidAmount = rnd((customer.paidAmount || 0) + amount);
       customer.lastWusoolDate = new Date();

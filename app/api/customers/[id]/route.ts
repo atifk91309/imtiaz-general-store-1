@@ -33,14 +33,21 @@ export async function GET(_req: NextRequest, { params }: RouteParams) {
 
     await dbConnect();
     const { id } = await params;
-    if (!id || !Types.ObjectId.isValid(id)) return NextResponse.json({ error: "Invalid id" }, { status: 400 });
+    if (!id) return NextResponse.json({ error: "Invalid id" }, { status: 400 });
 
     const userId = new Types.ObjectId(session.user.id);
-    const customer = await Customer.findOne({ _id: id, userId }).lean();
+
+    let customer = null;
+    if (Types.ObjectId.isValid(id)) {
+      customer = await Customer.findOne({ _id: id, userId }).lean();
+    }
+    if (!customer) {
+      customer = await Customer.findOne({ localId: id, userId }).lean();
+    }
     if (!customer) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
     const saleIds = customer.saleIds || [];
-    const sales = (saleIds.length > 0 ? await Sale.find({ _id: { $in: saleIds } }).sort({ createdAt: 1 }).lean() : []) as unknown as LeanSale[];
+    const sales = (saleIds.length > 0 ? await Sale.find({ _id: { $in: saleIds } }).sort({ createdAt: 1 }).lean() : []) as LeanSale[];
 
     const bills = sales.map((s) => ({
       _id: s._id.toString(),
@@ -65,7 +72,7 @@ export async function GET(_req: NextRequest, { params }: RouteParams) {
       },
       bills,
     });
-  } catch (e) {
+  } catch (e: unknown) {
     console.error("GET /api/customers/[id] error:", e);
     return NextResponse.json({ error: "Failed to fetch" }, { status: 500 });
   }
@@ -78,10 +85,17 @@ export async function DELETE(_req: NextRequest, { params }: RouteParams) {
 
     await dbConnect();
     const { id } = await params;
-    if (!id || !Types.ObjectId.isValid(id)) return NextResponse.json({ error: "Invalid id" }, { status: 400 });
+    if (!id) return NextResponse.json({ error: "Invalid id" }, { status: 400 });
 
     const userId = new Types.ObjectId(session.user.id);
-    const customer = await Customer.findOne({ _id: id, userId });
+
+    let customer = null;
+    if (Types.ObjectId.isValid(id)) {
+      customer = await Customer.findOne({ _id: id, userId });
+    }
+    if (!customer) {
+      customer = await Customer.findOne({ localId: id, userId });
+    }
     if (!customer) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
     await Customer.deleteOne({ _id: customer._id });
@@ -92,7 +106,7 @@ export async function DELETE(_req: NextRequest, { params }: RouteParams) {
       deletedName: customer.name,
       deletedBillsCount: customer.billsCount,
     });
-  } catch (e) {
+  } catch (e: unknown) {
     console.error("DELETE /api/customers/[id] error:", e);
     return NextResponse.json({ error: "Delete failed" }, { status: 500 });
   }

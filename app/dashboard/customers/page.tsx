@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState, useMemo, useCallback } from "react";
 import { offlineDB } from "@/lib/offline-db";
+import type { OfflineCustomer, OfflineSale, SaleCategory, WusoolSyncPayload, DeleteCustomerPayload } from "@/lib/offline-db";
 
 type WusoolEntry = { amount: number; date: string; note?: string; };
 type Bill = { 
@@ -15,12 +16,28 @@ type Customer = {
   createdAt?: string; isPaid?: boolean; paidAmount?: number; 
   paidAt?: string; lastWusoolDate?: string; updatedAt?: string; 
   billsCount?: number; wusoolHistory?: WusoolEntry[]; 
+  localId?: string;
 };
 type CustomerApi = Customer & { totalUdhar: number };
 type CustomerDetailResponse = { customer: Customer; bills: Bill[] };
+type SyncQueueWusoolItem = { localId: string; payload: WusoolSyncPayload };
+type SyncQueueAnyItem = { id?: number; localId: string; type: string; payload: unknown };
 
 function rnd(n: number) { return Math.round(n || 0); }
 function fmt(n: number) { return rnd(n).toLocaleString(); }
+function genLocalId(prefix: string){ return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2,5)}`; }
+
+function dedupHistory(list: WusoolEntry[]): WusoolEntry[] {
+  const seen = new Map<string, WusoolEntry>();
+  for(const w of list){
+    if(!w) continue;
+    const dateStr = (w.date || "").toString();
+    // minute tak slice -> 4:17:05 aur 4:17:06 same key banenge
+    const key = `${w.amount}-${dateStr.slice(0,16)}`;
+    if(!seen.has(key)) seen.set(key, w);
+  }
+  return Array.from(seen.values());
+}
 
 export default function CustomersPage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -33,14 +50,26 @@ export default function CustomersPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [billsMap, setBillsMap] = useState<Record<string, Bill[]>>({});
   const [billsLoading, setBillsLoading] = useState<string | null>(null);
+  const [isOnline, setIsOnline] = useState(true);
 
-  // ✅ 58mm + 80mm Wusool Print
+  useEffect(() => {
+    const update = () => setIsOnline(typeof navigator !== "undefined" ? navigator.onLine : true);
+    update();
+    window.addEventListener("online", update);
+    window.addEventListener("offline", update);
+    return () => {
+      window.removeEventListener("online", update);
+      window.removeEventListener("offline", update);
+    };
+  }, []);
+
   const printWusoolBill = useCallback(async (customer: string, paidNow: number, totalBill: number, totalPaid: number, remaining: number, size: "58mm" | "80mm" = "58mm") => {
     const now = new Date();
     const dateStr = now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' }).replace(/ /g, '-');
     const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
     const is58 = size === "58mm";
     const paperWidth = is58 ? "52mm" : "72mm";
+    const offlineTag = !isOnline ? "(OFFLINE)" : "";
     const billHtml = `<html><head><meta charset="utf-8"><style>
       @page { size: ${size} auto; margin: 0; }
       body { font-family: 'Courier New', monospace; margin:0; padding:${is58 ? "1mm" : "2mm"}; width: ${paperWidth}; font-size: ${is58 ? "9px" : "10px"}; color: #000; }
@@ -65,17 +94,45 @@ export default function CustomersPage() {
         <div class="row"><span>Total Paid:</span><b>Rs ${rnd(totalPaid).toFixed(0)}</b></div>
         <div class="row total-row"><span>BaQi / Remain:</span><b>Rs ${rnd(remaining).toFixed(0)}</b></div>
       </div>
-      <div class="footer">JUNAID KHAN - Thanks<br>Wusool received</div>
+      <div class="footer">JUNAID KHAN - Thanks<br>Wusool received ${offlineTag}</div>
     </body></html>`;
     const old = document.getElementById('imtiaz-print-iframe'); if (old) old.remove();
     const iframe = document.createElement('iframe'); iframe.id = 'imtiaz-print-iframe'; iframe.style.position = 'fixed'; iframe.style.width = '0'; iframe.style.height = '0'; iframe.style.border = '0'; document.body.appendChild(iframe);
     const doc = iframe.contentWindow?.document; if (!doc) return; doc.open(); doc.write(billHtml); doc.close();
     setTimeout(()=>{ iframe.contentWindow?.print(); }, 400); 
     setTimeout(()=>{ iframe.remove(); }, 8000);
-  }, []);
+  }, [isOnline]);
 
   const fetchAndSet = useCallback(async (searchTerm: string) => {
     try {
+      if(!isOnline) throw new Error("offline");
+
+      try{
+        const wusoolQueue = await offlineDB.syncQueue.where("type").equals("wusool").toArray() as SyncQueueAnyItem[];
+        for(const item of wusoolQueue){
+          const payload = item.payload as WusoolSyncPayload;
+          const res = await fetch("/api/khata/wusool",{
+            method:"POST",
+            headers:{"Content-Type":"application/json"},
+            body: JSON.stringify({ 
+              customerId: payload.customerLocalId,
+              customerName: payload.customerName,
+              localId: payload.customerLocalId,
+              amount: payload.amount,
+              note: payload.note,
+              date: payload.date
+            })
+          });
+          if(res.ok){
+            if(item.id !== undefined){
+              await offlineDB.syncQueue.delete(item.id);
+            } else {
+              await offlineDB.syncQueue.where("localId").equals(item.localId).delete();
+            }
+          }
+        }
+      }catch{/* ignore */}
+
       const res = await fetch(`/api/customers?search=${encodeURIComponent(searchTerm)}&status=all`);
       const data = (await res.json()) as { customers?: CustomerApi[] };
       const list: Customer[] = (data.customers?? []).map((c) => ({
@@ -84,75 +141,192 @@ export default function CustomersPage() {
         totalBusiness: rnd(c.totalBusiness || 0),
         paidAmount: rnd(c.paidAmount || 0),
         billsCount: c.billsCount || c.saleIds?.length || (c.saleId? 1 : 0),
-        wusoolHistory: (c.wusoolHistory || []).map((w: WusoolEntry) => ({...w, amount: rnd(w.amount)})),
+        wusoolHistory: dedupHistory((c.wusoolHistory || []).map((w: WusoolEntry) => ({...w, amount: rnd(w.amount)}))),
       }));
       const sorted = list.sort((a, b) => {
         if (a.isPaid!== b.isPaid) return a.isPaid? 1 : -1;
         return new Date(b.lastUdharDate || b.createdAt || 0).getTime() - new Date(a.lastUdharDate || a.createdAt || 0).getTime();
       });
       setCustomers(sorted);
+
+      try{
+        for(const c of list){
+          const exists = await offlineDB.customers.where("localId").equals(c._id).first();
+          if(!exists){
+            await offlineDB.customers.put({
+              localId: c._id,
+              name: c.name,
+              normalizedName: (c.normalizedName || c.name).trim().toLowerCase(),
+              phone: c.phone || "",
+              village: c.village || "",
+              totalUdhar: rnd(c.totalUdhar),
+              totalBusiness: rnd(c.totalBusiness),
+              saleIds: c.saleIds || [],
+              billsCount: c.billsCount || 1,
+              isPaid: c.isPaid || false,
+              paidAmount: rnd(c.paidAmount || 0),
+              wusoolHistory: dedupHistory(c.wusoolHistory || []),
+              lastUdharDate: c.lastUdharDate,
+              createdAt: c.createdAt || new Date().toISOString(),
+              synced: 1,
+            } as OfflineCustomer);
+          } else {
+            await offlineDB.customers.update(exists.localId, {
+              totalUdhar: rnd(c.totalUdhar),
+              totalBusiness: rnd(c.totalBusiness),
+              saleIds: c.saleIds || [],
+              billsCount: c.billsCount || 1,
+              isPaid: c.isPaid || false,
+              paidAmount: rnd(c.paidAmount || 0),
+              wusoolHistory: dedupHistory(c.wusoolHistory || []),
+              lastUdharDate: c.lastUdharDate,
+              synced: 1
+            });
+          }
+        }
+      }catch{/* ignore */}
     } catch {
       try {
-        const cached = await offlineDB.sales.toArray();
-        const map = new Map<string, Customer>();
-        cached.forEach((s) => {
-          const customerName = s.customerName;
-          const status = s.status;
-          const total = s.total;
-          const localId = s.localId;
-          if (!customerName || customerName === "Walk-in") return;
-          const key = customerName.trim().toLowerCase();
-          if (!map.has(key)) {
-            map.set(key, { _id: key, name: customerName, phone: "", village: "", totalUdhar: 0, totalBusiness: 0, isPaid: false, saleIds: [] });
-          }
-          const c = map.get(key);
-          if (c) {
-            if (status === "pending") c.totalUdhar = rnd(c.totalUdhar + total);
-            c.totalBusiness = rnd(c.totalBusiness + total);
-            c.saleIds?.push(localId);
-          }
-        });
-        setCustomers(Array.from(map.values()));
-      } catch {}
+        const cachedCustomers = await offlineDB.customers.toArray() as OfflineCustomer[];
+        let list: Customer[] = [];
+        if(cachedCustomers.length>0){
+          list = cachedCustomers.filter(c=> !searchTerm || c.name.toLowerCase().includes(searchTerm.toLowerCase()) || (c.normalizedName||"").includes(searchTerm.toLowerCase())).map(c=> ({
+            _id: c.localId, localId: c.localId, name: c.name, phone: c.phone||"", village: c.village||"", totalUdhar: rnd(c.totalUdhar), totalBusiness: rnd(c.totalBusiness), isPaid: c.isPaid, paidAmount: rnd(c.paidAmount||0), billsCount: c.billsCount||c.saleIds?.length||0, 
+            wusoolHistory: dedupHistory((c.wusoolHistory||[]) as WusoolEntry[]), 
+            lastUdharDate: c.lastUdharDate, createdAt: c.createdAt, saleIds: c.saleIds||[]
+          }));
+        } else {
+          const cachedSales = await offlineDB.sales.toArray();
+          const map = new Map<string, Customer>();
+          cachedSales.forEach((s) => {
+            if (!s.customerName || s.customerName === "Walk-in") return;
+            if(s.status === "deleted") return;
+            const key = s.customerName.trim().toLowerCase();
+            if (!map.has(key)) {
+              map.set(key, { _id: key, localId: s.customerId || key, name: s.customerName, phone: "", village: "", totalUdhar: 0, totalBusiness: 0, isPaid: false, saleIds: [] });
+            }
+            const c = map.get(key);
+            if (c) {
+              if (s.status === "pending") c.totalUdhar = rnd(c.totalUdhar + s.total);
+              c.totalBusiness = rnd(c.totalBusiness + s.total);
+              c.saleIds?.push(s.localId);
+            }
+          });
+          list = Array.from(map.values());
+          try{
+            const wusoolQueue = await offlineDB.syncQueue.where("type").equals("wusool").toArray() as SyncQueueWusoolItem[];
+            for(const q of wusoolQueue){
+              const payload = q.payload;
+              if(!payload?.amount) continue;
+              const cust = list.find(c=> c.localId === payload.customerLocalId || c._id === payload.customerLocalId || c.name.toLowerCase() === (payload.customerName||"").toLowerCase());
+              if(cust){
+                cust.totalUdhar = Math.max(0, rnd(cust.totalUdhar - payload.amount));
+                cust.paidAmount = rnd((cust.paidAmount||0) + payload.amount);
+                cust.wusoolHistory = dedupHistory([...(cust.wusoolHistory||[]), { amount: payload.amount, date: payload.date, note: payload.note }]);
+                if(cust.totalUdhar===0) cust.isPaid = true;
+              }
+            }
+          }catch{ /* ignore */ }
+        }
+        const sorted = list.filter(c=> !searchTerm || c.name.toLowerCase().includes(searchTerm.toLowerCase())).sort((a)=> a.isPaid ? 1 : -1);
+        setCustomers(sorted);
+      } catch { /* ignore */ }
     }
-  }, []);
-// eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { void fetchAndSet(search); }, [search, fetchAndSet]);
+  }, [isOnline]);
 
-  useEffect(() => {
+  useEffect(() => { 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void fetchAndSet(search); 
+  }, [search, fetchAndSet]);
+
+      useEffect(() => {
     if (!expandedId) return;
-    if (billsMap[expandedId]) return;
+    // agar already cache hai to loading mat dikhao
+    if (billsMap[expandedId]?.length) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setBillsLoading(null);
+      return;
+    }
     let cancelled = false;
     const fetchBills = async () => {
       setBillsLoading(expandedId);
       try {
+        if(!isOnline) throw new Error("offline");
         const res = await fetch(`/api/customers/${expandedId}`);
         if (!res.ok) throw new Error("Failed");
         const data = (await res.json()) as CustomerDetailResponse;
-        if (!cancelled) setBillsMap((prev) => ({...prev, [expandedId]: data.bills || [] }));
+        if (!cancelled) {
+          setBillsMap((prev) => ({...prev, [expandedId]: data.bills || [] }));
+          try{
+            for(const b of (data.bills||[])){
+              const exists = await offlineDB.sales.where("localId").equals(b._id).first();
+              if(!exists){
+                const saleCategory = (b.category as SaleCategory) || "general" as SaleCategory;
+                const newSale: OfflineSale = {
+                  localId: b._id,
+                  _id: b._id,
+                  productId: b._id,
+                  productName: b.productName,
+                  category: saleCategory,
+                  quantity: b.quantity,
+                  sellPrice: b.sellPrice || 0,
+                  buyPrice: 0,
+                  buyPriceAvg: 0,
+                  total: b.total,
+                  profit: 0,
+                  customerName: customers.find(c=> c._id===expandedId)?.name || "",
+                  paymentType: "credit",
+                  status: "pending",
+                  userId: "",
+                  createdAt: b.createdAt || new Date().toISOString(),
+                  synced: 1,
+                  customerId: expandedId,
+                };
+                await offlineDB.sales.put(newSale);
+              }
+            }
+          }catch{/* ignore */}
+        }
       } catch {
         try {
           const allSales = await offlineDB.sales.toArray();
-          const custName = customers.find((c) => c._id === expandedId)?.name.trim().toLowerCase();
-          const related = allSales.filter((s) => s.customerName?.trim().toLowerCase() === custName);
-          const mapped: Bill[] = related.map((s) => {
-            return { 
-              _id: s.localId, 
-              productName: s.productName, 
-              quantity: s.quantity, 
-              total: rnd(s.total), 
-              createdAt: s.createdAt,
-              category: s.category,
-              sellPrice: s.sellPrice,
-            };
+          const currentCustomer = customers.find((c) => c._id === expandedId || c.localId === expandedId);
+          const offlineCustomer = await offlineDB.customers.where("localId").equals(expandedId).first();
+
+          const custName = currentCustomer?.name.trim().toLowerCase() || offlineCustomer?.name.trim().toLowerCase() || "";
+          const custSaleIds = new Set<string>([...(currentCustomer?.saleIds||[]), ...(offlineCustomer?.saleIds||[])]);
+
+          let related = allSales.filter((s) => {
+            if(s.status === "deleted") return false;
+            if(custSaleIds.size > 0 && (custSaleIds.has(s.localId) || (s._id && custSaleIds.has(s._id)))) return true;
+            const nameMatch = s.customerName?.trim().toLowerCase() === custName;
+            const idMatch = s.customerId === expandedId || s.customerId === currentCustomer?.localId || s.customerId === offlineCustomer?.localId;
+            return nameMatch || idMatch;
           });
+
+          if(related.length === 0 && custSaleIds.size > 0){
+            related = allSales.filter(s=> custSaleIds.has(s.localId) || (s._id ? custSaleIds.has(s._id) : false));
+          }
+
+          const mapped: Bill[] = related.map((s) => ({ 
+            _id: s.localId, 
+            productName: s.productName, 
+            quantity: s.quantity, 
+            total: rnd(s.total), 
+            createdAt: s.createdAt, 
+            category: s.category, 
+            sellPrice: s.sellPrice 
+          }));
           if (!cancelled) setBillsMap((prev) => ({...prev, [expandedId]: mapped }));
-        } catch {}
-      } finally { if (!cancelled) setBillsLoading(null); }
+        } catch { /* ignore */ }
+      } finally { 
+        if (!cancelled) setBillsLoading(null); 
+      }
     };
     void fetchBills();
     return () => { cancelled = true; };
-  }, [expandedId, billsMap, customers]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expandedId, customers, isOnline]); // ✅ billsMap hata diya dependency se
 
   const reload = useCallback(async () => { await fetchAndSet(search); }, [fetchAndSet, search]);
 
@@ -160,40 +334,130 @@ export default function CustomersPage() {
     if (!wusoolId ||!amount || wusoolLoading) return;
     setWusoolLoading(true);
     const paidAmt = rnd(Number(amount));
-    // Find customer before wusool for print data
-    const cust = customers.find(c=> c._id === wusoolId);
+    const cust = customers.find(c=> c._id === wusoolId || c.localId === wusoolId);
     const totalBillBefore = cust?.totalBusiness || 0;
     const totalPaidBefore = cust?.paidAmount || 0;
 
     try {
-      const res = await fetch("/api/khata/wusool", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ customerId: wusoolId, amount: paidAmt }),
-      });
-      const data = await res.json().catch(()=>({}));
-      if (!res.ok) throw new Error(data.error || "Wusool failed");
-      
-      // ✅ PRINT 58mm Wusool Receipt
-      const newTotalPaid = totalPaidBefore + paidAmt;
-      const remaining = totalBillBefore - newTotalPaid;
-      const finalRemaining = cust?.totalUdhar ? cust.totalUdhar - paidAmt : remaining;
-      await printWusoolBill(cust?.name || wusoolName || "Customer", paidAmt, totalBillBefore, newTotalPaid, finalRemaining < 0 ? 0 : finalRemaining, "58mm");
+      if(!isOnline){
+        let offlineCust = await offlineDB.customers.get(wusoolId) as OfflineCustomer | undefined;
+        if(!offlineCust) offlineCust = await offlineDB.customers.where("localId").equals(wusoolId).first() as OfflineCustomer | undefined;
+        if(!offlineCust){
+          const norm = (cust?.name||wusoolName||"").trim().toLowerCase();
+          offlineCust = await offlineDB.customers.where("normalizedName").equals(norm).first() as OfflineCustomer | undefined;
+        }
+        if(!offlineCust && cust){
+          const newLocalId = cust.localId || wusoolId || genLocalId("cust");
+          const newCustomer: OfflineCustomer = {
+            localId: newLocalId,
+            name: cust.name,
+            normalizedName: cust.name.trim().toLowerCase(),
+            phone: cust.phone || "",
+            village: cust.village || "",
+            totalUdhar: rnd(cust.totalUdhar),
+            totalBusiness: rnd(cust.totalBusiness),
+            saleIds: cust.saleIds || [],
+            billsCount: cust.billsCount || 1,
+            isPaid: cust.isPaid || false,
+            paidAmount: rnd(cust.paidAmount || 0),
+            wusoolHistory: dedupHistory(cust.wusoolHistory || []),
+            lastUdharDate: cust.lastUdharDate,
+            createdAt: cust.createdAt || new Date().toISOString(),
+            synced: 0,
+          };
+          await offlineDB.customers.put(newCustomer);
+          offlineCust = newCustomer;
+        }
+        if(!offlineCust) throw new Error("Customer offline not found - please go online once to cache");
+
+        const newUdhar = Math.max(0, rnd(offlineCust.totalUdhar - paidAmt));
+        const newPaid = rnd((offlineCust.paidAmount||0) + paidAmt);
+        const entry: WusoolEntry = { amount: paidAmt, date: new Date().toISOString(), note: "" };
+
+        const cleanedHistory = dedupHistory([...(offlineCust.wusoolHistory||[]) as WusoolEntry[], entry]);
+
+        await offlineDB.customers.update(offlineCust.localId, {
+          totalUdhar: newUdhar,
+          paidAmount: newPaid,
+          wusoolHistory: cleanedHistory,
+          lastWusoolDate: entry.date,
+          isPaid: newUdhar===0,
+          synced: 0
+        });
+
+        const payload: WusoolSyncPayload = {
+          customerLocalId: offlineCust.localId,
+          amount: paidAmt,
+          date: entry.date,
+          note: "",
+          customerName: offlineCust.name
+        };
+
+        await offlineDB.syncQueue.put({
+          type: "wusool",
+          localId: genLocalId("wusool"),
+          payload: payload,
+          createdAt: new Date(),
+          attempts: 0
+        });
+
+        const newTotalPaid = totalPaidBefore + paidAmt;
+        const remaining = cust?.totalUdhar ? cust.totalUdhar - paidAmt : totalBillBefore - newTotalPaid;
+        await printWusoolBill(cust?.name || wusoolName || "Customer", paidAmt, totalBillBefore, newTotalPaid, remaining < 0 ? 0 : remaining, "58mm");
+
+        setCustomers(prev => prev.map(c => {
+          if(c._id === wusoolId || c.localId === wusoolId){
+            return { ...c, totalUdhar: newUdhar, paidAmount: newPaid, isPaid: newUdhar===0, wusoolHistory: cleanedHistory };
+          }
+          return c;
+        }));
+
+      } else {
+        const res = await fetch("/api/khata/wusool", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ customerId: wusoolId, amount: paidAmt }),
+        });
+        const data = await res.json().catch(()=>({} as { error?: string }));
+        if (!res.ok) throw new Error((data as { error?: string }).error || "Wusool failed");
+        
+        const newTotalPaid = totalPaidBefore + paidAmt;
+        const remaining = cust?.totalUdhar ? cust.totalUdhar - paidAmt : totalBillBefore - newTotalPaid;
+        await printWusoolBill(cust?.name || wusoolName || "Customer", paidAmt, totalBillBefore, newTotalPaid, remaining < 0 ? 0 : remaining, "58mm");
+        await reload();
+      }
 
       setWusoolId(null); setWusoolName(null); setAmount(""); 
-      await reload();
     } catch (err: unknown) {
       const msg = err instanceof Error? err.message : "Wusool failed"; alert(msg);
     } finally { setWusoolLoading(false); }
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Imtiaz Store: Delete this Khata permanently? History will be removed.")) return;
+    if (!confirm("Imtiaz Store: Delete this Khata permanently?")) return;
     setDeletingId(id);
     try {
-      const res = await fetch(`/api/customers/${id}`, { method: "DELETE" });
-      const data = (await res.json().catch(() => ({}))) as { error?: string };
-      if (!res.ok) throw new Error(data.error || "Delete failed");
-      setCustomers((prev) => prev.filter((c) => c._id!== id)); await reload();
+      if(!isOnline){
+        await offlineDB.customers.where("localId").equals(id).delete();
+        await offlineDB.customers.where("normalizedName").equals(id).delete();
+        const delPayload: DeleteCustomerPayload = {
+          action: "delete",
+          customerId: id,
+          localId: id
+        };
+        await offlineDB.syncQueue.put({
+          type: "delete_customer",
+          localId: genLocalId("del_cust"),
+          payload: delPayload,
+          createdAt: new Date(),
+          attempts: 0
+        });
+        setCustomers((prev) => prev.filter((c) => c._id!== id && c.localId !== id));
+      } else {
+        const res = await fetch(`/api/customers/${id}`, { method: "DELETE" });
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        if (!res.ok) throw new Error(data.error || "Delete failed");
+        setCustomers((prev) => prev.filter((c) => c._id!== id)); await reload();
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error? err.message : "Delete failed"; alert(msg);
     } finally { setDeletingId(null); }
@@ -208,8 +472,8 @@ export default function CustomersPage() {
     <div className="p-2 sm:p-3 md:p-4 max-w-2xl mx-auto min-h-screen bg-gray-50">
       <div className="bg-white rounded-xl p-3 mb-2 flex justify-between items-center shadow-sm border">
         <div className="min-w-0">
-          <h1 className="font-bold text-[14px] leading-tight truncate">📒 Imtiaz General Store - Khata</h1>
-          <p className="text-[10px] text-gray-500">{pendingCount} pending • {paidCount} paid (Del available) • Total {customers.length}</p>
+          <h1 className="font-bold text-[14px] leading-tight truncate">📒 Imtiaz General Store - Khata {!isOnline ? "📶 Offline" : ""}</h1>
+          <p className="text-[10px] text-gray-500">{pendingCount} pending • {paidCount} paid • Total {customers.length}</p>
         </div>
         <span className="font-bold text-red-600 text-[13px] whitespace-nowrap ml-2">Rs {fmt(totalUdhar)}</span>
       </div>
@@ -220,9 +484,10 @@ export default function CustomersPage() {
             const udharDate = c.lastUdharDate || c.createdAt; 
             const wusoolDate = c.paidAt || c.lastWusoolDate || c.updatedAt;
             const isDeleting = deletingId === c._id; 
-            const billsCount = c.billsCount || 1; 
-            const isExpanded = expandedId === c._id;
-            const currentBills = billsMap[c._id] || [];
+            const billsCount = c.billsCount || c.saleIds?.length || 1; 
+            const isExpanded = expandedId === c._id || expandedId === c.localId;
+            const currentBills = billsMap[c._id] || billsMap[c.localId||""] || [];
+            const uniqueWusool = dedupHistory(c.wusoolHistory || []);
             return (
               <div key={c._id} className={`bg-white p-2.5 rounded-xl border shadow-sm ${c.isPaid? "bg-green-50/60 border-green-200" : ""}`}>
                 <div className="flex justify-between items-start">
@@ -246,15 +511,15 @@ export default function CustomersPage() {
                 </div>
                 {isExpanded && (
                   <div className="mt-3 border-t pt-2">
-                    <p className="text-[11px] font-bold mb-2">🛒 Items Bought ({billsCount})</p>
+                    <p className="text-[11px] font-bold mb-2">🛒 Items Bought ({currentBills.length || billsCount})</p>
                     {billsLoading === c._id? <p className="text-[10px] text-gray-400">Loading...</p> : currentBills.length > 0? (
                       <div className="space-y-1.5 mb-3">{currentBills.map((b) => (
                           <div key={b._id} className="flex justify-between bg-gray-50 border rounded-lg px-2.5 py-2 text-[11px]">
                             <div className="flex-1 min-w-0"><p className="font-bold leading-tight truncate">{b.productName}</p><p className="text-[10px] text-gray-600 leading-tight">Qty {b.quantity} • Rs {fmt(b.sellPrice||0)}/pcs • {b.category}</p><p className="text-[9px] text-gray-400">{b.createdAt? new Date(b.createdAt).toLocaleString() : ""}</p></div><span className="font-bold ml-2">Rs {fmt(b.total)}</span></div>))}</div>
                     ) : <p className="text-[10px] text-gray-400 mb-2">No bill detail - Total Rs {fmt(c.totalBusiness)}</p>}
                     <p className="text-[11px] font-bold mb-1 border-t pt-2">Wusool History - {c.name}</p>
-                    {c.wusoolHistory && c.wusoolHistory.length > 0? (
-                      <div className="space-y-1">{c.wusoolHistory.slice().reverse().map((w, idx) => (
+                    {uniqueWusool.length > 0? (
+                      <div className="space-y-1">{uniqueWusool.slice().reverse().map((w, idx) => (
                           <div key={`${w.date}-${idx}`} className="flex justify-between bg-gray-50 rounded-lg px-2 py-1.5 text-[11px]">
                             <span className="font-bold text-green-700">Rs {fmt(w.amount)}</span>
                             <span className="flex gap-2 items-center">
@@ -273,10 +538,10 @@ export default function CustomersPage() {
       {wusoolId && (
         <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center p-2 z-50">
           <div className="bg-white rounded-t-2xl sm:rounded-2xl p-4 w-full max-w-sm">
-            <h2 className="font-bold text-[13px] mb-2">Wusool from {wusoolName} - Imtiaz Store</h2>
+            <h2 className="font-bold text-[13px] mb-2">Wusool from {wusoolName} - {!isOnline ? "OFFLINE" : "Online"}</h2>
             <p className="text-[10px] text-gray-500 mb-2">#{wusoolId.slice(-6)} • {new Date().toLocaleString()}</p>
             <input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="Amount" className="w-full p-2.5 border rounded-xl mb-3 outline-none text-[13px] focus:ring-2 focus:ring-black"/>
-            <div className="flex gap-2"><button onClick={() => { setWusoolId(null); setWusoolName(null); }} disabled={wusoolLoading} className="flex-1 p-2.5 bg-gray-100 rounded-xl text-[13px]">Cancel</button><button onClick={handleWusool} disabled={wusoolLoading} className="flex-1 p-2.5 bg-black text-white rounded-xl font-bold text-[13px]">{wusoolLoading? "..." : "Receive + Print 58mm"}</button></div>
+            <div className="flex gap-2"><button onClick={() => { setWusoolId(null); setWusoolName(null); }} disabled={wusoolLoading} className="flex-1 p-2.5 bg-gray-100 rounded-xl text-[13px]">Cancel</button><button onClick={handleWusool} disabled={wusoolLoading} className="flex-1 p-2.5 bg-black text-white rounded-xl font-bold text-[13px]">{wusoolLoading? "..." : !isOnline ? "Receive Offline + Print" : "Receive + Print 58mm"}</button></div>
           </div>
         </div>
       )}

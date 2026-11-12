@@ -15,9 +15,16 @@ type CustomerBody = {
   totalUdhar?: number;
   totalBusiness?: number;
   saleId?: string;
+  localId?: string;
 };
 
 function rnd(n: number) { return Math.round(n || 0); }
+
+function isDuplicateKeyError(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const obj = err as { code?: unknown };
+  return obj.code === 11000;
+}
 
 export async function GET(req: NextRequest) {
   try {
@@ -27,44 +34,21 @@ export async function GET(req: NextRequest) {
 
     const sp = req.nextUrl.searchParams;
     const search = sp.get("search")?.trim() || "";
-    // ✅ FIX: default pending se all kiya - taake paid khata gayab na ho, history rahe
     const status = sp.get("status") || "all"; 
     const userId = new Types.ObjectId(session.user.id);
 
-    if (search) {
-      const regex = { $regex: search, $options: "i" };
-      const normRegex = { $regex: search.toLowerCase(), $options: "i" };
-      const query = status === "all"
+    const regex = { $regex: search, $options: "i" };
+    const normRegex = { $regex: search.toLowerCase(), $options: "i" };
+
+    const query = search
+      ? status === "all"
         ? { userId, $or: [{ name: regex }, { normalizedName: normRegex }, { phone: regex }, { village: regex }] }
-        : { userId, isPaid: status === "paid", $or: [{ name: regex }, { normalizedName: normRegex }, { phone: regex }, { village: regex }] };
-      
-      // ✅ pending upar, paid (Del wala) niche
-      const customers = await Customer.find(query).sort({ isPaid: 1, lastUdharDate: -1 }).lean();
-      const rounded = customers.map((c) => ({
-        ...c,
-        totalUdhar: rnd(c.totalUdhar),
-        totalBusiness: rnd(c.totalBusiness),
-        paidAmount: rnd(c.paidAmount),
-        billsCount: c.billsCount || c.saleIds?.length || 1,
-      }));
-      const totalUdharAgg = rounded.filter(c => !c.isPaid).reduce((s,c) => s + c.totalUdhar, 0);
-      return NextResponse.json({ customers: rounded, totalUdhar: rnd(totalUdharAgg), totalCustomers: rounded.length });
-    }
+        : { userId, isPaid: status === "paid", $or: [{ name: regex }, { normalizedName: normRegex }, { phone: regex }, { village: regex }] }
+      : status === "all"
+        ? { userId }
+        : { userId, isPaid: status === "paid" };
 
-    if (status === "all") {
-      const customers = await Customer.find({ userId }).sort({ isPaid: 1, lastUdharDate: -1 }).lean();
-      const rounded = customers.map((c) => ({
-        ...c,
-        totalUdhar: rnd(c.totalUdhar),
-        totalBusiness: rnd(c.totalBusiness),
-        paidAmount: rnd(c.paidAmount),
-        billsCount: c.billsCount || c.saleIds?.length || 1,
-      }));
-      const totalUdharAgg = rounded.filter(c => !c.isPaid).reduce((s,c) => s + c.totalUdhar, 0);
-      return NextResponse.json({ customers: rounded, totalUdhar: rnd(totalUdharAgg), totalCustomers: rounded.length });
-    }
-
-    const customers = await Customer.find({ userId, isPaid: status === "paid" }).sort({ isPaid: 1, lastUdharDate: -1 }).lean();
+    const customers = await Customer.find(query).sort({ isPaid: 1, lastUdharDate: -1 }).lean();
     const rounded = customers.map((c) => ({
       ...c,
       totalUdhar: rnd(c.totalUdhar),
@@ -96,7 +80,11 @@ export async function POST(req: NextRequest) {
     const totalBiz = rnd(body.totalBusiness || body.totalUdhar || 0);
     const saleObjectId = body.saleId && Types.ObjectId.isValid(body.saleId) ? new Types.ObjectId(body.saleId) : undefined;
 
-    const existing = await Customer.findOne({ userId, normalizedName: normalized, isPaid: false });
+    let existing = await Customer.findOne({ userId, normalizedName: normalized, isPaid: false });
+    if (!existing && body.localId) {
+      existing = await Customer.findOne({ userId, localId: body.localId });
+    }
+
     if (existing) {
       existing.totalUdhar = rnd(existing.totalUdhar + total);
       existing.totalBusiness = rnd(existing.totalBusiness + totalBiz);
@@ -109,6 +97,7 @@ export async function POST(req: NextRequest) {
       existing.lastUdharDate = new Date();
       if (body.phone?.trim()) existing.phone = body.phone.trim();
       if (body.village?.trim()) existing.village = body.village.trim();
+      if (body.localId && !existing.localId) existing.localId = body.localId;
       await existing.save();
       return NextResponse.json(existing, { status: 200 });
     }
@@ -127,10 +116,14 @@ export async function POST(req: NextRequest) {
       isPaid: false,
       paidAmount: 0,
       wusoolHistory: [],
+      localId: body.localId || undefined,
     });
     return NextResponse.json(cust, { status: 201 });
-  } catch (e) {
+  } catch (e: unknown) {
     console.error("POST /api/customers error:", e);
+    if (isDuplicateKeyError(e)) {
+      return NextResponse.json({ message: "Already exists" }, { status: 200 });
+    }
     return NextResponse.json({ error: "Failed to create customer" }, { status: 500 });
   }
 }

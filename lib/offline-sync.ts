@@ -1,5 +1,5 @@
-import { offlineDB, calcProfit, calcTotal } from "./offline-db";
-import type { OfflineSale, OfflineEasypaisa, EasyType, SaleCategory, SyncQueueItem, OfflinePayload, WusoolSyncPayload } from "./offline-db";
+import { offlineDB, calcProfit, calcTotal, savePendingReturn, savePendingProductDelete } from "./offline-db";
+import type { OfflineSale, OfflineEasypaisa, EasyType, SaleCategory, SyncQueueItem, WusoolSyncPayload, PendingReturn, DeleteCustomerPayload, PendingProductDelete } from "./offline-db";
 
 export interface SaleInput {
   productId: string;
@@ -38,8 +38,20 @@ type SyncableRegistration = ServiceWorkerRegistration & {
   sync?: { register: (tag: string) => Promise<void> };
 };
 
-function isWusoolPayload(payload: OfflinePayload): payload is WusoolSyncPayload {
-  return typeof payload === "object" && payload !== null && "amount" in payload && "date" in payload && !("productId" in payload);
+function isWusoolPayload(payload: unknown): payload is WusoolSyncPayload {
+  if (!payload || typeof payload !== "object") return false;
+  const p = payload as Record<string, unknown>;
+  if ("retQty" in p) return false;
+  if ("productName" in p) return false;
+  if ("action" in p) return false;
+  if ("type" in p && typeof p.type === "string" && ["send","receive","bill","easyload","jazzcash","deposit","withdraw"].includes(p.type as string)) return false;
+  return "amount" in p && "date" in p && "customerLocalId" in p;
+}
+
+function isDeletePayload(payload: unknown): payload is DeleteCustomerPayload {
+  if (!payload || typeof payload !== "object") return false;
+  const p = payload as Record<string, unknown>;
+  return p.action === "delete" && typeof p.customerId === "string";
 }
 
 export async function saveSaleOffline(data: SaleInput): Promise<string> {
@@ -73,9 +85,7 @@ export async function saveSaleOffline(data: SaleInput): Promise<string> {
           const newStock = rnd(product.stock - qty);
           await offlineDB.products.update(product.localId, { stock: newStock < 0 ? 0 : newStock, synced: 0 });
         }
-      } catch {
-        // ignore stock update error, still save sale
-      }
+      } catch { /* ignore */ }
       await offlineDB.sales.put(sale);
       await offlineDB.syncQueue.put({ type: "sale", localId, payload: sale, createdAt: new Date(), attempts: 0 });
       if (isCredit && data.customerName && data.customerName.toLowerCase() !== "walk-in") {
@@ -110,9 +120,7 @@ export async function saveSaleOffline(data: SaleInput): Promise<string> {
     try {
       const reg = (await navigator.serviceWorker.ready) as SyncableRegistration;
       if (reg.sync) await reg.sync.register("sync-sales");
-    } catch {
-      // ignore
-    }
+    } catch { /* ignore */ }
   }
   return localId;
 }
@@ -144,8 +152,9 @@ export async function saveEasypaisaOffline(data: EasypaisaInput): Promise<string
 
 export async function syncOfflineSales(): Promise<{ synced: number }> {
   const sales = await offlineDB.sales.where("synced").equals(0).toArray();
+  const toSync = sales.filter(s => s.status !== "deleted");
   let synced = 0;
-  for (const s of sales) {
+  for (const s of toSync) {
     try {
       const res = await fetch("/api/sales", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -161,17 +170,68 @@ export async function syncOfflineSales(): Promise<{ synced: number }> {
         await offlineDB.syncQueue.where("localId").equals(s.localId).delete();
         synced++;
       }
-    } catch {
-      // network error, keep for next try
-    }
+    } catch { /* ignore */ }
   }
   return { synced };
 }
 
-export async function syncAllOffline(): Promise<{ sales: number; easypaisa: number; wusool: number }> {
-  if (typeof window === "undefined" || !navigator.onLine) return { sales: 0, easypaisa: 0, wusool: 0 };
+export async function syncPendingReturns(): Promise<{ synced: number }> {
+  if (typeof window === "undefined" || !navigator.onLine) return { synced: 0 };
+  const pending = await offlineDB.pendingReturns.where("synced").equals(0).toArray() as PendingReturn[];
+  let synced = 0;
+  for (const r of pending) {
+    try {
+      let res: Response;
+      if (r.newQty === 0) {
+        res = await fetch(`/api/sales/${r.saleId}`, { method: "DELETE" });
+      } else {
+        res = await fetch(`/api/sales/${r.saleId}`, { 
+          method: "PUT", 
+          headers: { "Content-Type": "application/json" }, 
+          body: JSON.stringify({ quantity: r.newQty }) 
+        });
+      }
+      if (res.ok) {
+        if (r.id) await offlineDB.pendingReturns.delete(r.id);
+        else await offlineDB.pendingReturns.where("saleId").equals(r.saleId).delete();
+        synced++;
+      }
+    } catch { /* ignore */ }
+  }
+  try{ localStorage.removeItem("pendingReturns"); }catch{ /* ignore */ }
+  return { synced };
+}
+
+// ✅ NEW - Product Delete Sync
+export async function syncPendingProductDeletes(): Promise<{ synced: number }> {
+  if (typeof window === "undefined" || !navigator.onLine) return { synced: 0 };
+  const pending = await offlineDB.pendingProductDeletes.where("synced").equals(0).toArray() as PendingProductDelete[];
+  let synced = 0;
+  for (const r of pending) {
+    try {
+      const res = await fetch(`/api/products/${r.productId}`, { method: "DELETE" });
+      if (res.ok || res.status === 404) {
+        // double cleanup offline cache
+        try{
+          await offlineDB.products.where('_id').equals(r.productId).delete();
+          await offlineDB.products.where('localId').equals(r.productId).delete();
+          await offlineDB.products.where('localId').equals(r.localId).delete();
+        }catch{}
+        if (r.id) await offlineDB.pendingProductDeletes.delete(r.id);
+        else await offlineDB.pendingProductDeletes.where("productId").equals(r.productId).delete();
+        synced++;
+      }
+    } catch { /* ignore */ }
+  }
+  return { synced };
+}
+
+export async function syncAllOffline(): Promise<{ sales: number; easypaisa: number; wusool: number; returns: number; deletes: number; productDeletes: number }> {
+  if (typeof window === "undefined" || !navigator.onLine) return { sales: 0, easypaisa: 0, wusool: 0, returns: 0, deletes: 0, productDeletes: 0 };
   
   const salesResult = await syncOfflineSales();
+  const returnsResult = await syncPendingReturns();
+  const productDeletesResult = await syncPendingProductDeletes();
   
   let easySynced = 0;
   const easy = await offlineDB.easypaisa.where("synced").equals(0).toArray();
@@ -190,9 +250,7 @@ export async function syncAllOffline(): Promise<{ sales: number; easypaisa: numb
         await offlineDB.syncQueue.where("localId").equals(e.localId).delete();
         easySynced++;
       }
-    } catch {
-      // keep
-    }
+    } catch { /* ignore */ }
   }
 
   let wusoolSynced = 0;
@@ -200,30 +258,56 @@ export async function syncAllOffline(): Promise<{ sales: number; easypaisa: numb
   for (const q of wusoolQueue) {
     try {
       if (!isWusoolPayload(q.payload)) continue;
-      const cust = q.payload.customerLocalId ? await offlineDB.customers.get(q.payload.customerLocalId) : null;
-      const customerName = cust?.name || "";
+      const cust = await offlineDB.customers.get(q.payload.customerLocalId);
+      const customerName = cust?.name || q.payload.customerName || "";
       if (!customerName) continue;
-      const res = await fetch("/api/customers/wusool", {
+      const res = await fetch("/api/khata/wusool", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           customerName,
+          customerId: q.payload.customerLocalId,
+          localId: q.payload.customerLocalId,
           amount: q.payload.amount,
           note: q.payload.note || "",
-          localId: q.localId,
+          date: q.payload.date,
         }),
       });
       if (res.ok) {
         if (q.id !== undefined) {
           await offlineDB.syncQueue.delete(q.id);
+        } else {
+          await offlineDB.syncQueue.where("localId").equals(q.localId).delete();
         }
         wusoolSynced++;
       }
-    } catch {
-      // keep
-    }
+    } catch { /* ignore */ }
   }
 
-  return { sales: salesResult.synced, easypaisa: easySynced, wusool: wusoolSynced };
+  let deleteSynced = 0;
+  try{
+    const delQueue = await offlineDB.syncQueue.where("type").equals("delete_customer").toArray();
+    for(const q of delQueue){
+      if(!isDeletePayload(q.payload)) continue;
+      try{
+        const res = await fetch(`/api/customers/${q.payload.customerId}`, { method: "DELETE" });
+        if(res.ok || res.status === 404){
+          if(q.id !== undefined) await offlineDB.syncQueue.delete(q.id);
+          else await offlineDB.syncQueue.where("localId").equals(q.localId).delete();
+          deleteSynced++;
+        }
+      }catch{/* ignore */}
+    }
+  }catch{/* ignore */}
+
+  return { sales: salesResult.synced, easypaisa: easySynced, wusool: wusoolSynced, returns: returnsResult.synced, deletes: deleteSynced, productDeletes: productDeletesResult.synced };
+}
+
+export async function saveOfflineReturn(saleId: string, newQty: number, retQty: number, productId: string): Promise<void> {
+  await savePendingReturn(saleId, newQty, retQty, productId);
+}
+
+export async function saveOfflineProductDelete(productId: string, localId: string): Promise<void> {
+  await savePendingProductDelete(productId, localId);
 }
 
 if (typeof window !== "undefined") {
