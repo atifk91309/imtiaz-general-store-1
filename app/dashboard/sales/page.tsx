@@ -60,6 +60,8 @@ export default function SalesPage(){
   const [printerConnected, setPrinterConnected] = useState(false);
   const [allSalesTotal, setAllSalesTotal] = useState(0);
   const [allSalesProfit, setAllSalesProfit] = useState(0);
+  const [isCheckingOut, setIsCheckingOut] = useState(false);
+  const checkoutLockRef = useRef(false);
   const isOnlineHook = useIsOnline();
   const isOffline = mounted && !isOnlineHook;
   const searchRef = useRef<HTMLInputElement>(null);
@@ -436,21 +438,47 @@ filtered.sort((a,b)=>{
   const cartTotal=cart.reduce((s,c)=>s+c.total,0);
   const cartProfit=cart.reduce((s,c)=>s+rnd((c.price-c.buyPriceAvg)*c.qty),0);
 
-  const checkout=useCallback(async()=>{
-    if(cart.length===0){ alert("Cart empty"); return; }
-    if(paymentType==="credit"){ const name=customerName.trim(); if(name.length<2 || name.toLowerCase()==="walk-in"){ setCustomerError(true); alert("Customer name required for Udhar!"); customerInputRef.current?.focus(); return; } }
-    const finalCustomer=customerName.trim()||"Walk-in"; const copy=[...cart]; const now=new Date().toISOString();
-    let sessionUserId = ""; try { const res = await fetch("/api/auth/session"); if(res.ok){ const data = await res.json() as SessionRes; sessionUserId = data?.user?.id || data?.user?._id || ""; } } catch{}
-    const offlineUser = getOfflineUser() as OfflineUser; const rawUserId = offlineUser?._id || offlineUser?.id || sessionUserId || "offline_user";
+  const checkout = useCallback(async()=>{
+  if(checkoutLockRef.current) return; // Double click block
+  if(cart.length===0){ alert("Cart empty"); return; }
+  if(paymentType==="credit"){ 
+    const name=customerName.trim(); 
+    if(name.length<2 || name.toLowerCase()==="walk-in"){ 
+      setCustomerError(true); 
+      alert("Customer name required for Udhar!"); 
+      customerInputRef.current?.focus(); 
+      return; 
+    } 
+  }
+
+  checkoutLockRef.current = true;
+  setIsCheckingOut(true);
+
+  try {
+    const finalCustomer=customerName.trim()||"Walk-in"; 
+    const copy=[...cart]; 
+    const now=new Date().toISOString();
+    setCart([]); // Cart foran khali karo, taake dobara sell na ho
+    setCustomPrices({});
+
+    let sessionUserId = ""; 
+    try { const res = await fetch("/api/auth/session"); if(res.ok){ const data = await res.json() as SessionRes; sessionUserId = data?.user?.id || data?.user?._id || ""; } } catch{}
+    const offlineUser = getOfflineUser() as OfflineUser; 
+    const rawUserId = offlineUser?._id || offlineUser?.id || sessionUserId || "offline_user";
     const newSales: Sale[]=copy.map((c,i)=>({ _id:`local_${Date.now()}_${i}`, productId:c.productId, productName:c.name, category:c.category, quantity:c.qty, sellPrice:c.price, total:c.total, profit:rnd((c.price-c.buyPriceAvg)*c.qty), createdAt:now, customerName:finalCustomer, status:paymentType==="credit"?"pending":"paid", paymentType }));
     setSales((prev)=>[...newSales, ...prev]);
-    setAllSalesTotal((prev)=>prev+cartTotal); setAllSalesProfit((prev)=>prev+cartProfit);
-    await printBill(copy, cartTotal, finalCustomer); setCart([]); setCustomPrices({});
+    setAllSalesTotal((prev)=>prev+cartTotal); 
+    setAllSalesProfit((prev)=>prev+cartProfit);
+    await printBill(copy, cartTotal, finalCustomer);
     for(let i=0;i<copy.length;i++){ const c=copy[i]; const saleToSave: OfflineSale = { localId: newSales[i]._id, productId: c.productId, productName: c.name, category: c.category, quantity: c.qty, sellPrice: c.price, buyPrice: c.buyPriceAvg, buyPriceAvg: c.buyPriceAvg, total: c.total, profit: newSales[i].profit, customerName: finalCustomer, paymentType: paymentType, status: paymentType==="credit"?"pending":"paid", userId: rawUserId, createdAt: now, synced: 0, }; try{ await offlineDB.sales.put(saleToSave); }catch{} }
     await refreshCounts();
     if(navigator.onLine){ for(let i=0;i<copy.length;i++){ const c=copy[i]; try{ const res = await fetch("/api/sales",{ method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ productId:c.productId, productName:c.name, quantity:c.qty, sellPrice:c.price, buyPrice:c.buyPriceAvg, buyPriceAvg:c.buyPriceAvg, customerName:finalCustomer, paymentType, category:c.category, userId: sessionUserId || rawUserId, localId: newSales[i]._id, }) }); if(res.ok){ try{ const data = await res.json() as { sale?: { _id?: string }, _id?: string }; const serverId = data?.sale?._id || data?._id; if(serverId) await offlineDB.sales.update(newSales[i]._id, {synced:1, _id: serverId}); else await offlineDB.sales.update(newSales[i]._id, {synced:1}); }catch{} } }catch{} } await refreshCounts(); }
     setProducts((prev)=>prev.map((prod)=>{ const totalQty = copy.filter((x)=>x.productId===prod._id).reduce((s,x)=>s+x.qty,0); return totalQty>0 && prod.stockMode==="limited" ? {...prod, stock:Math.max(0,prod.stock-totalQty)} : prod; }));
-  },[cart, customerName, paymentType, refreshCounts, cartTotal, cartProfit, printBill]);
+  } finally {
+    checkoutLockRef.current = false;
+    setIsCheckingOut(false);
+  }
+},[cart, customerName, paymentType, refreshCounts, cartTotal, cartProfit, printBill]);
 
   return(
     <div id="pos-main-page" tabIndex={-1} className="min-h-screen bg-gray-50 p-2 sm:p-4 max-w-7xl mx-auto outline-none">
@@ -543,7 +571,9 @@ filtered.sort((a,b)=>{
             <input ref={customerInputRef} value={customerName} onChange={(e)=>{ setCustomerName(e.target.value); if(e.target.value.trim().length>=2) setCustomerError(false); }} placeholder="Customer name for Udhar" className={`w-full border p-2 rounded-lg text-[12px] mb-2 ${customerError ? "border-red-500 bg-red-50 ring-2 ring-red-300" : ""}`} />
             {customerError && <p className="text-[10px] text-red-600 mb-2 font-bold">* Customer name required for Udhar</p>}
             <div className="flex bg-gray-100 rounded-lg p-1 mb-3"><button type="button" onClick={()=>{ setPaymentType("cash"); setCustomerError(false); }} className={`flex-1 py-1.5 rounded-md text-[11px] font-bold ${paymentType==="cash"?"bg-green-600 text-white":"text-gray-600"}`}>Cash</button><button type="button" onClick={()=>{ const name=customerName.trim(); if(name.length<2 || name.toLowerCase()==="walk-in"){ setCustomerError(true); alert("Customer name required!"); customerInputRef.current?.focus(); return; } setCustomerError(false); setPaymentType("credit"); }} className={`flex-1 py-1.5 rounded-md text-[11px] font-bold ${paymentType==="credit"?"bg-red-600 text-white":"text-gray-600"}`}>Udhar</button></div>
-            <button type="button" onClick={()=>{ void checkout(); }} disabled={cart.length===0} className="w-full bg-black text-white py-2.5 rounded-xl font-bold text-[13px] disabled:bg-gray-300">{paymentType==="credit"? `Udhar Rs.${fmt(cartTotal)} + Print` : `Sell Rs.${fmt(cartTotal)} • Profit ${fmt(cartProfit)} + Print`}</button>
+            <button type="button" onClick={()=>{ void checkout(); }} disabled={cart.length===0 || isCheckingOut} className="w-full bg-black text-white py-2.5 rounded-xl font-bold text-[13px] disabled:bg-gray-300">
+            {isCheckingOut ? "⏳ Selling... Please Wait" : paymentType==="credit" ? `Udhar Rs.${fmt(cartTotal)} + Print` : `Sell Rs.${fmt(cartTotal)} • Profit ${fmt(cartProfit)} + Print`}
+          </button>
             {pendingCount>0 && <button type="button" onClick={()=>void syncPendingSales()} className="w-full mt-2 bg-amber-500 text-white py-2 rounded-xl font-bold text-[11px]">Sync {pendingCount} Pending Now</button>}
           </div>
           <div className="bg-white border rounded-xl overflow-hidden">
