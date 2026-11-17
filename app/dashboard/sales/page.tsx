@@ -5,8 +5,8 @@ import type { OfflineSale, OfflineProduct } from "@/lib/offline-db";
 import { getOfflineUser } from "@/lib/offline-auth";
 import { syncAllOffline, syncPendingReturns } from "@/lib/offline-sync";
 
-type BluetoothDevice = { name?: string; gatt?: { connect: () => Promise<void> } };
-type BluetoothNavigator = { bluetooth?: { requestDevice: (options: Record<string, unknown>) => Promise<BluetoothDevice> } };
+ 
+ 
 type Category = "mobile_accessories" | "manyari" | "cosmetics" | "other" | "general";
 type Product = { _id: string; name: string; category: Category; buyPrice: number; buyPriceAvg: number; sellPrice: number; stock: number; stockMode: "limited"|"unlimited"; barcode?: string; };
 type Sale = { _id: string; productId: string; productName: string; category: Category; quantity: number; sellPrice: number; total: number; profit: number; createdAt: string; customerName?: string; status?: string; paymentType?: string; };
@@ -56,8 +56,8 @@ export default function SalesPage(){
   const [pendingCount, setPendingCount] = useState(0);
   const [mounted, setMounted] = useState(false);
   const [customerError, setCustomerError] = useState(false);
-  const [printerName, setPrinterName] = useState("");
-  const [printerConnected, setPrinterConnected] = useState(false);
+   
+   
   const [allSalesTotal, setAllSalesTotal] = useState(0);
   const [allSalesProfit, setAllSalesProfit] = useState(0);
   const isOnlineHook = useIsOnline();
@@ -128,22 +128,64 @@ export default function SalesPage(){
   const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
   const invNo = `INV-${Date.now().toString().slice(-6)}`;
   const itemCount = cartItems.length;
-  const rows = cartItems.map(i => `<tr><td>${i.name}</td><td>${i.qty}</td><td>${i.price.toFixed(2)}</td><td>${i.total.toFixed(2)}</td></tr>`).join('');
-  const billHtml = `<html><head><meta charset="utf-8"><style>@page { size: 80mm auto; margin: 0; } body { font-family: 'Courier New', monospace; margin:0; padding:2mm; width: 72mm; font-size: 10px; color: #000; } .center { text-align:center } .store-name { font-size:16px; font-weight:900; margin:0 } .address { font-size:9px; line-height:1.2 } .phones { font-size:9px; font-weight:bold } .divider { border-top:1px solid #000; margin:3px 0 } .info { font-size:9px; line-height:1.3 } table { width:100%; border-collapse:collapse; border: 1.5px solid #000; } th { border: 1px solid #000; padding:3px 2px; font-size:9px; text-align:center; background: #eee; } td { border: 1px solid #000; padding:3px 2px; font-size:9px; text-align:center; } td:first-child { text-align:left; padding-left:4px } .totals { border: 1.5px solid #000; border-top:none; } .totals td { border: 1px solid #000; padding:2px 3px; font-size:10px; text-align:left } .totals td:last-child { text-align:right; font-weight:bold } .footer { text-align:center; font-size:8px; margin-top:4px; border-top:1px solid #000; padding-top:3px }</style></head><body><div class="center"><div class="store-name">Imtiaz General Store</div><div class="address">Main Ghulam Kheel Chowk Parmoli Road<br>Sultan Market Shewa</div><div class="phones">0343-3518722, 0343-8989277, Junaid Khan</div></div><div class="divider"></div><div class="info">Inv no: ${invNo} ${dateStr} ${timeStr}<br><b>${customer.toUpperCase()}</b></div><table><thead><tr><th style="width:46%">Item Description</th><th style="width:12%">Qty</th><th style="width:18%">Rate</th><th style="width:24%">Amount</th></tr></thead><tbody>${rows}</tbody></table><table class="totals"><tr><td style="width:46%">No of Items: ${itemCount}</td><td style="width:30%">Amount:</td><td style="width:24%">${total.toFixed(2)}</td></tr><tr><td>Note</td><td>Discount:</td><td>0.00</td></tr><tr><td></td><td>Recieved:</td><td>${total.toFixed(2)}</td></tr><tr><td></td><td>Balance:</td><td>0.00</td></tr></table><div class="info" style="border:1.5px solid #000; border-top:none; padding:2px 3px">User: JUNAID KHAN</div><div class="footer">Thanks for Business with us<br>Please check your items before leaving counter</div></body></html>`;
+  const rows = cartItems.map(i => `<tr><td>${i.name}</td><td>${i.qty}</td><td>${i.price.toFixed(0)}</td><td>${i.total.toFixed(0)}</td></tr>`).join('');
+
+  const billHtml = `<html><head><meta charset="utf-8"><style>
+    * { box-sizing: border-box; }
+    @page { size: 58mm auto; margin: 0; }
+    html, body { margin:0; padding:0; width: 58mm; }
+    body { font-family: 'Courier New', monospace; padding: 2mm 2mm 0 2mm; width: 58mm; font-size: 11px; color: #000; line-height: 1.3; }
+    .center { text-align:center }
+    .store-name { font-size:17px; font-weight:900; margin:0; line-height:1.1; }
+    .address { font-size:9px; line-height:1.2 }
+    .phones { font-size:9px; font-weight:bold }
+    .divider { border-top:1px dashed #000; margin:4px 0; }
+    .info { font-size:10px; line-height:1.3 }
+    table { width:100%; border-collapse:collapse; }
+    th { border-bottom:1px solid #000; padding:2px 1px; font-size:9px; text-align:center; }
+    td { padding:2px 1px; font-size:10px; text-align:center; }
+    td:first-child { text-align:left; }
+    .totals { width:100%; margin-top:2px; border-top:1px solid #000; }
+    .totals td { padding:2px 1px; font-size:10px; text-align:left; }
+    .totals td:last-child { text-align:right; font-weight:bold; }
+    .footer { text-align:center; font-size:8px; margin-top:4px; border-top:1px dashed #000; padding-top:3px; padding-bottom: 6mm; }
+  </style></head><body>
+    <div class="center">
+      <div class="store-name">Imtiaz General Store</div>
+      <div class="address">Main Ghulam Kheel Chowk Parmoli Road<br>Sultan Market Shewa</div>
+      <div class="phones">0343-3518722, 0343-8989277, Junaid Khan</div>
+    </div>
+    <div class="divider"></div>
+    <div class="info">Inv no: ${invNo} ${dateStr} ${timeStr}<br><b>${customer.toUpperCase()}</b></div>
+    <table><thead><tr><th style="width:46%">Item</th><th style="width:12%">Qty</th><th style="width:18%">Rate</th><th style="width:24%">Amount</th></tr></thead><tbody>${rows}</tbody></table>
+    <table class="totals"><tr><td style="width:46%">Items: ${itemCount}</td><td style="width:30%">Amount:</td><td style="width:24%">${total.toFixed(0)}</td></tr><tr><td>Note</td><td>Discount:</td><td>0</td></tr><tr><td></td><td>Received:</td><td>${total.toFixed(0)}</td></tr><tr><td></td><td>Balance:</td><td>0</td></tr></table>
+    <div class="info" style="border-top:1px solid #000; padding:2px 1px">User: JUNAID KHAN</div>
+    <div class="footer">Thanks for Business with us<br>Please check your items before leaving counter</div>
+  </body></html>`;
+
   const old = document.getElementById('imtiaz-print-iframe'); if (old) old.remove();
-  const iframe = document.createElement('iframe'); iframe.id = 'imtiaz-print-iframe'; iframe.style.position = 'fixed'; iframe.style.width = '0'; iframe.style.height = '0'; iframe.style.border = '0'; document.body.appendChild(iframe);
-  const doc = iframe.contentWindow?.document; if (!doc) return; doc.open(); doc.write(billHtml); doc.close();
-  setTimeout(()=>{ iframe.contentWindow?.print(); }, 400); setTimeout(()=>{ iframe.remove(); }, 8000);
+  const iframe = document.createElement('iframe');
+  iframe.id = 'imtiaz-print-iframe';
+  iframe.style.position = 'fixed';
+  iframe.style.right = '0';
+  iframe.style.bottom = '0';
+  iframe.style.width = '0';
+  iframe.style.height = '0';
+  iframe.style.border = '0';
+  document.body.appendChild(iframe);
+  const doc = iframe.contentWindow?.document; if (!doc) return;
+  doc.open(); doc.write(billHtml); doc.close();
+  // Print ke baad hi iframe hatao
+  const cleanup = () => { setTimeout(()=> iframe.remove(), 500); };
+  iframe.contentWindow?.addEventListener('afterprint', cleanup);
+  setTimeout(()=>{ iframe.contentWindow?.focus(); iframe.contentWindow?.print(); }, 500);
+  // Fallback agar afterprint na aaye
+  setTimeout(()=>{ iframe.remove(); }, 10000);
 }, []);
 
   const connectPrinter = useCallback(async () => {
-    try {
-      const nav = window.navigator as unknown as BluetoothNavigator;
-      if (!nav.bluetooth) { alert("Bluetooth not supported. Use Chrome on Android."); return; }
-      const device = await nav.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: ['battery_service', '000018f0-0000-1000-8000-00805f9b34fb', '49535343-fe7d-4ae5-8fa9-9fafd205e455', '0000ff00-0000-1000-8000-00805f9b34fb'] });
-      await device.gatt?.connect(); setPrinterName(device.name || "Thermal Printer"); setPrinterConnected(true); alert(`✅ Connected: ${device.name || "Thermal Printer"}`);
-    } catch (err: unknown) { const msg = err instanceof Error ? err.message : ""; if (msg.includes("User cancelled")) return; alert("Printer connect failed. Pair first in Bluetooth settings."); }
-  }, []);
+  alert("Printer system se connected hai.\nPrint dabao > Printer me MPT-II_BFEF select karo.\nPaper Size: 58mm rakho.");
+}, []);
 
   useEffect(()=>{
     let cancelled=false;
@@ -455,9 +497,9 @@ filtered.sort((a,b)=>{
   return(
     <div id="pos-main-page" tabIndex={-1} className="min-h-screen bg-gray-50 p-2 sm:p-4 max-w-7xl mx-auto outline-none">
       <div className="flex flex-wrap justify-between gap-2 mb-3">
-        <h1 className="font-bold text-[18px]">🛒 Imtiaz General Store - POS {isOffline?"📶 Offline":""} {printerConnected?`🖨️ ${printerName}`:""}</h1>
+        <h1 className="font-bold text-[18px]">🛒 Imtiaz General Store - POS {isOffline?"📶 Offline":""}</h1>
         <div className="flex gap-2">
-          <button onClick={connectPrinter} className={`px-3 py-1 rounded-full text-[11px] font-bold ${printerConnected?"bg-green-600 text-white":"bg-blue-600 text-white"}`}>{printerConnected?`🖨️ ${printerName}`:"🖨️ Connect BT Printer"}</button>
+          <button className="px-3 py-1 rounded-full text-[11px] font-bold bg-green-600 text-white">🖨️ MPT-II Ready (58mm)</button>
           <span className="bg-green-600 text-white px-3 py-1 rounded-full text-[11px]">Sale Rs.{fmt(allSalesTotal)}</span>
           <span className="bg-blue-600 text-white px-3 py-1 rounded-full text-[11px]">Profit Rs.{fmt(allSalesProfit)}</span>
           {pendingCount>0 && <span className="bg-amber-500 text-white px-3 py-1 rounded-full text-[11px]">{pendingCount} pending</span>}
@@ -529,7 +571,7 @@ filtered.sort((a,b)=>{
         </div>
         <div className="space-y-3">
           <div className="bg-white border rounded-xl p-3 sticky top-2">
-            <div className="flex justify-between items-center mb-2"><p className="font-bold text-[13px]">🛒 Cart ({cart.length}) - Rs.{fmt(cartTotal)}</p><div className="flex gap-1"><button onClick={connectPrinter} className="text-[10px] bg-blue-50 text-blue-700 border border-blue-200 px-2 py-1 rounded-lg font-bold">{printerConnected?"🖨️ Connected":"🖨️ BT"}</button><button onClick={()=>{ if(cart.length>0) void printBill(cart, cartTotal, customerName); }} className="text-[10px] bg-black text-white px-2 py-1 rounded-lg font-bold">Print</button></div></div>
+            <div className="flex justify-between items-center mb-2"><p className="font-bold text-[13px]">🛒 Cart ({cart.length}) - Rs.{fmt(cartTotal)}</p><div className="flex gap-1"><button onClick={connectPrinter} className="text-[10px] bg-blue-50 text-blue-700 border border-blue-200 px-2 py-1 rounded-lg font-bold">🖨️ 58mm Help</button><button onClick={()=>{ if(cart.length>0) void printBill(cart, cartTotal, customerName); }} className="text-[10px] bg-black text-white px-2 py-1 rounded-lg font-bold">Print</button></div></div>
             <div className="space-y-1 max-h-60 overflow-y-auto mb-3">{cart.length===0? <p className="text-[11px] text-gray-400 text-center py-4">Scan barcode to add - Fast billing</p> : cart.map((c)=>(
               <div key={c.cartId} className="flex justify-between items-center text-[11px] border-b py-1.5">
                 <span className="flex-1 truncate pr-2">{c.name} x{c.qty} @ {fmt(c.price)}</span>

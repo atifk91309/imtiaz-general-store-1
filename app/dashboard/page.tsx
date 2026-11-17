@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, useCallback, useSyncExternalStore } from "react";
+import { useEffect, useState, useCallback, useSyncExternalStore, useRef } from "react";
 import Link from "next/link";
 import { offlineDB } from "@/lib/offline-db";
 
@@ -37,6 +37,156 @@ export default function ImtiazDashboard(){
   const [topFilter, setTopFilter] = useState<"today"|"weekly"|"monthly"|"all">("monthly");
   const [loading, setLoading] = useState(true);
   const [pendingCount, setPendingCount] = useState(0);
+
+  // ✅ NEW: Backup / Restore state
+  const [backingUp, setBackingUp] = useState(false);
+  const [restoring, setRestoring] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  // ✅ NEW: Download Backup - Online + Offline both work
+  const handleBackup = async () => {
+    setBackingUp(true);
+    try {
+      let data: unknown;
+      if (isOffline) {
+        const [offlineProducts, offlineSales, offlineCustomers] = await Promise.all([
+          offlineDB.products.toArray(),
+          offlineDB.sales.filter(s => s.status !== "deleted").toArray(),
+          offlineDB.customers.toArray(),
+        ]);
+        data = { app: "Imtiaz General Store", version: "2.0", exportedAt: new Date().toISOString(), data: { products: offlineProducts, sales: offlineSales, customers: offlineCustomers, easypaisa: [] } };
+      } else {
+        const res = await fetch("/api/backup/export");
+        if (!res.ok) throw new Error("Export failed");
+        data = await res.json();
+      }
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `imtiaz-general-store-backup-${new Date().toISOString().slice(0,10)}-${Date.now()}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      alert("✅ Backup Downloaded - Imtiaz General Store");
+    } catch (e) {
+      alert("Backup failed: " + (e instanceof Error ? e.message : ""));
+    } finally { setBackingUp(false); }
+  };
+
+  const handleRestoreFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  if (!confirm(`Restore backup ${file.name}?\n\nProducts stock will UPDATE to backup value.\nDeleted sales will NOT come back.`)) { e.target.value = ""; return; }
+  setRestoring(true);
+  try {
+    const json = JSON.parse(await file.text());
+    if (isOffline) {
+      const data = json.data ?? json;
+      await offlineDB.transaction("rw", [offlineDB.products, offlineDB.sales, offlineDB.customers, offlineDB.easypaisa], async () => {
+        if (data.products) {
+          for (const p of data.products) {
+            // ✅ Search by barcode first (your Dexie index has barcode), then by _id / localId
+            const exists = p.barcode
+              ? await offlineDB.products.where("barcode").equals(p.barcode).first()
+              : p._id
+              ? await offlineDB.products.where("_id").equals(p._id).first()
+              : p.localId
+              ? await offlineDB.products.get(p.localId)
+              : undefined;
+            if (exists) {
+              // ✅ Primary key is localId - use it directly
+              await offlineDB.products.update(exists.localId, {
+                ...p,
+                localId: exists.localId, // keep original key, never change
+                _id: exists._id ?? p._id,
+                synced: 0, // will re-sync to server
+              });
+            } else {
+              // New product - ensure required OfflineProduct fields
+              await offlineDB.products.add({
+                ...p,
+                localId: p.localId || p._id || `prod_${Date.now()}_${Math.random().toString(36).slice(2,7)}`,
+                synced: 0,
+                createdAt: p.createdAt || new Date().toISOString(),
+                userId: p.userId || "",
+                category: p.category || "general",
+                buyPriceAvg: p.buyPriceAvg ?? p.buyPrice ?? 0,
+                stockMode: p.stockMode || "limited",
+              });
+            }
+          }
+        }
+        if (data.sales) {
+          for (const s of data.sales) {
+            if (s.status === "deleted") continue;
+            const exists = s.localId
+              ? await offlineDB.sales.get(s.localId)
+              : s._id
+              ? await offlineDB.sales.where("_id").equals(s._id).first()
+              : undefined;
+            if (!exists) {
+              await offlineDB.sales.add({
+                ...s,
+                localId: s.localId || s._id || `sale_${Date.now()}_${Math.random().toString(36).slice(2,7)}`,
+                synced: 0,
+                createdAt: s.createdAt || new Date().toISOString(),
+              });
+            }
+          }
+        }
+        if (data.customers) {
+          for (const c of data.customers) {
+            const exists = c.normalizedName
+              ? await offlineDB.customers.where("normalizedName").equals(c.normalizedName).first()
+              : c.localId
+              ? await offlineDB.customers.get(c.localId)
+              : undefined;
+            if (exists) {
+              // ✅ Use localId as key - same as your upsertOfflineCustomer
+              await offlineDB.customers.update(exists.localId, {
+                ...c,
+                localId: exists.localId,
+                _id: exists._id ?? c._id,
+                synced: 0,
+              });
+            } else {
+              await offlineDB.customers.add({
+                ...c,
+                localId: c.localId || `cust_${Date.now()}_${Math.random().toString(36).slice(2,7)}`,
+                synced: 0,
+                createdAt: c.createdAt || new Date().toISOString(),
+                saleIds: c.saleIds || [],
+                billsCount: c.billsCount ?? 0,
+              });
+            }
+          }
+        }
+        if (data.easypaisa) {
+          for (const ep of data.easypaisa) {
+            const exists = ep.localId ? await offlineDB.easypaisa.get(ep.localId) : undefined;
+            if (!exists) {
+              await offlineDB.easypaisa.add({
+                ...ep,
+                localId: ep.localId || `easy_${Date.now()}_${Math.random().toString(36).slice(2,7)}`,
+                synced: 0,
+                createdAt: ep.createdAt || new Date().toISOString(),
+              });
+            }
+          }
+        }
+      });
+      alert("✅ Offline Restore Done - Imtiaz General Store");
+    } else {
+      const res = await fetch("/api/backup/restore", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(json) });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || "Restore failed");
+      alert(`✅ ${result.message}`);
+    }
+    location.reload();
+  } catch (err) {
+    alert("Restore failed: " + (err instanceof Error ? err.message : ""));
+  } finally { setRestoring(false); e.target.value = ""; }
+};
 
   useEffect(()=>{
     const ctrl = new AbortController();
@@ -78,7 +228,6 @@ export default function ImtiazDashboard(){
             if(d>=startYear){ yT+=s.total; if(s.profit>=0) yPP+=s.profit; else yPN+=Math.abs(s.profit); yC++; }
           });
 
-          // STOCK VALUE BY BUY PRICE — FIXED
           const stockValue = mappedProds.reduce((a,p)=> a + p.stock * (p.buyPriceAvg || p.buyPrice), 0);
           const stockValueSell = mappedProds.reduce((a,p)=> a + p.stock * p.sellPrice, 0);
           const lowList = mappedProds.filter(p=> p.stockMode!=="unlimited" && p.stock>0 && p.stock<=5);
@@ -144,7 +293,25 @@ export default function ImtiazDashboard(){
       {reports && reports.khata.totalUdhar>0 && <div className="mb-3 bg-red-50 border border-red-200 text-red-800 text-[12px] p-2.5 rounded-xl flex justify-between"><span>📒 Total Udhar: Rs.{fmt(reports.khata.totalUdhar)} • {reports.khata.customers} customers</span><Link href="/dashboard/customers" className="bg-red-600 text-white px-3 py-1 rounded-lg text-[11px]">Khata</Link></div>}
 
       <h1 className="text-[20px] font-bold">🛍️ Imtiaz Store Dashboard</h1>
-      <p className="text-[11px] text-gray-500 mb-4">{new Date().toLocaleDateString()} • {isOffline?"Offline Mode":"Online"} • Year {new Date().getFullYear()}</p>
+      <p className="text-[11px] text-gray-500 mb-3">{new Date().toLocaleDateString()} • {isOffline?"Offline Mode":"Online"} • Year {new Date().getFullYear()}</p>
+
+      {/* ✅ NEW: Backup & Restore Bar - Imtiaz */}
+      <div className="bg-white border rounded-xl p-3 mb-4">
+        <div className="flex justify-between items-center mb-2">
+          <b className="text-[12px]">💾 Backup & Restore - Imtiaz General Store</b>
+          <span className="text-[10px] text-gray-400">{isOffline ? "Offline backup" : "Cloud backup"}</span>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={handleBackup} disabled={backingUp} className="flex-1 bg-blue-600 text-white p-3 rounded-xl font-bold text-[12px] disabled:opacity-50">
+            {backingUp ? "⏳ Backing..." : "💾 Backup Now"}
+          </button>
+          <button onClick={() => fileRef.current?.click()} disabled={restoring} className="flex-1 bg-green-600 text-white p-3 rounded-xl font-bold text-[12px] disabled:opacity-50">
+            {restoring ? "⏳ Restoring..." : "♻️ Restore Backup"}
+          </button>
+          <input ref={fileRef} type="file" accept=".json" className="hidden" onChange={handleRestoreFile} />
+        </div>
+        <p className="text-[10px] text-gray-400 mt-2">💡 Tip: Backup your products, sales and udhar to protect your data.</p>
+      </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 mb-3">
         <div className="bg-white p-4 rounded-xl border"><p className="text-[10px] text-gray-400">Today Sale</p><p className="text-[18px] font-bold">Rs.{fmt(reports?.today.total||0)}</p><p className="text-[10px] text-green-600">Profit Rs.{fmt(reports?.today.profit||0)} • {reports?.today.count||0} sales</p></div>
