@@ -68,38 +68,33 @@ export default function CustomersPage() {
     const dateStr = now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' }).replace(/ /g, '-');
     const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
     const is58 = size === "58mm";
-    const paperWidth = is58 ? "52mm" : "72mm";
+    const paperWidth = is58 ? "48mm" : "72mm";
     const offlineTag = !isOnline ? "(OFFLINE)" : "";
     const billHtml = `<html><head><meta charset="utf-8"><style>
       @page { size: ${size} auto; margin: 0; }
-      body { font-family: 'Courier New', monospace; margin:0; padding:${is58 ? "1mm" : "2mm"}; width: ${paperWidth}; font-size: ${is58 ? "9px" : "10px"}; color: #000; }
-      .center { text-align:center } .store-name { font-size:${is58 ? "13px" : "16px"}; font-weight:900; margin:0 }
-      .divider { border-top:1px solid #000; margin:2px 0; padding:2px 0; text-align:center }
-      .info { font-size:${is58 ? "9px" : "11px"}; line-height:1.3 }
-      .box { border:1.5px solid #000; padding:3px; margin-top:4px }
-      .row { display:flex; justify-content:space-between; font-size:${is58 ? "9px" : "11px"}; padding:1.5px 0; border-bottom:1px dashed #aaa }
-      .total-row { font-weight:900; font-size:${is58 ? "11px" : "13px"}; border-top:1.5px solid #000; border-bottom:1.5px solid #000; padding:3px 0; margin-top:2px }
-      .footer { text-align:center; font-size:7px; margin-top:4px; border-top:1px solid #000; padding-top:2px }
+      * { margin:0; padding:0; box-sizing:border-box; color:#000 !important; }
+      body { font-family: Arial, sans-serif; margin:0 auto; padding:0; width: ${paperWidth}; font-size: 10px; background:#fff; }
+      .center { text-align:center }
+      .store-name { font-size:13px; line-height:1.1; font-weight:900; }
+      .address { font-size:9px; line-height:1.2; font-weight:900; }
+      .divider { border-top:1px solid #000; margin:3px 0; padding:2px 0; text-align:center }
+      .info { font-size:9px; line-height:1.3; word-wrap:break-word; font-weight:700; }
+      table { width:100%; border-collapse:collapse; border:1px solid #000; table-layout:fixed; }
+      td { border:1px solid #000; padding:2px 2px; font-size:9.5px; text-align:left; font-weight:900; }
+      td:last-child { text-align:right; font-family:'Courier New', monospace; font-weight:700; }
+      .total-row td { font-size:11px; border-top:2px solid #000; }
+      .footer { text-align:center; font-size:9px; margin-top:4px; border-top:1px solid #000; padding-top:3px; font-weight:900; }
     </style></head><body>
-      <div class="center">
-        <div class="store-name">Imtiaz General Store</div>
-        <div style="font-size:${is58 ? "7px" : "9px"}">Ghulam Kheel Chowk, Shewa<br>0343-3518722</div>
-      </div>
-      <div class="divider"><b style="font-size:${is58 ? "11px" : "14px"}">WUSOOL RECEIPT</b></div>
-      <div class="info">${dateStr} ${timeStr}<br>Cust: <b>${customer.toUpperCase().slice(0, is58 ? 18 : 30)}</b></div>
-      <div class="box">
-        <div class="row"><span>Total Bill:</span><b>Rs ${rnd(totalBill).toFixed(0)}</b></div>
-        <div class="row"><span>Prev Paid:</span><b>Rs ${rnd(totalPaid - paidNow).toFixed(0)}</b></div>
-        <div class="row" style="background:#000; color:#fff; padding:2px"><span>Wusool Now:</span><b>Rs ${rnd(paidNow).toFixed(0)}</b></div>
-        <div class="row"><span>Total Paid:</span><b>Rs ${rnd(totalPaid).toFixed(0)}</b></div>
-        <div class="row total-row"><span>BaQi / Remain:</span><b>Rs ${rnd(remaining).toFixed(0)}</b></div>
-      </div>
+      <div class="center"><div class="store-name">Imtiaz General Store</div><div class="address">Main Ghulam Kheel Chowk Parmoli Road<br>Sultan Market Shewa</div><div class="address">0343-3518722, 0343-8989277, Junaid Khan</div></div>
+      <div class="divider"><b style="font-size:11px">WUSOOL RECEIPT</b></div>
+      <div class="info">${dateStr} ${timeStr}<br>Cust: <b>${customer.toUpperCase().slice(0, is58 ? 22 : 30)}</b></div>
+      <table style="margin-top:3px"><tr><td>Total Bill:</td><td>Rs ${Math.round(totalBill)}</td></tr><tr><td>Prev Paid:</td><td>Rs ${Math.round(totalPaid - paidNow)}</td></tr><tr><td>Wusool Now:</td><td>Rs ${Math.round(paidNow)}</td></tr><tr><td>Total Paid:</td><td>Rs ${Math.round(totalPaid)}</td></tr><tr class="total-row"><td>BaQi / Remain:</td><td>Rs ${Math.round(remaining)}</td></tr></table>
       <div class="footer">JUNAID KHAN - Thanks<br>Wusool received ${offlineTag}</div>
     </body></html>`;
     const old = document.getElementById('imtiaz-print-iframe'); if (old) old.remove();
     const iframe = document.createElement('iframe'); iframe.id = 'imtiaz-print-iframe'; iframe.style.position = 'fixed'; iframe.style.width = '0'; iframe.style.height = '0'; iframe.style.border = '0'; document.body.appendChild(iframe);
     const doc = iframe.contentWindow?.document; if (!doc) return; doc.open(); doc.write(billHtml); doc.close();
-    setTimeout(()=>{ iframe.contentWindow?.print(); }, 400); 
+    setTimeout(()=>{ iframe.contentWindow?.print(); }, 400);
     setTimeout(()=>{ iframe.remove(); }, 8000);
   }, [isOnline]);
 
