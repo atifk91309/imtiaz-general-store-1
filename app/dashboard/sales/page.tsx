@@ -110,19 +110,27 @@ export default function SalesPage(){
   },[refreshCounts]);
 
   const cacheAllProductsOnce = useCallback(async()=>{
-    try{
-      const res = await fetch(`/api/products?search=&category=all&page=1&limit=500`);
+  try{
+    const offlineUser = getOfflineUser() as OfflineUser;
+    const userId = offlineUser?._id || offlineUser?.id || "offline";
+    let page = 1, totalCached = 0, hasMore = true;
+    while(hasMore){
+      const res = await fetch(`/api/products?search=&category=all&page=${page}&limit=100`);
       const data = await res.json() as ProductApiResponse;
       const list = Array.isArray(data) ? data : data.products;
-      const offlineUser = getOfflineUser() as OfflineUser;
-      const userId = offlineUser?._id || offlineUser?.id || "offline";
+      const pag = Array.isArray(data) ? undefined : data.pagination;
+      if(!list || list.length===0) break;
       const toCache: OfflineProduct[] = list.map((p)=>({
         _id: p._id, localId: p._id, name: p.name, category: toCat(p.category), company: "", buyPrice: p.buyPriceAvg||p.buyPrice, buyPriceAvg: p.buyPriceAvg||p.buyPrice, sellPrice: p.sellPrice, stock: p.stock, stockMode: p.stockMode, barcode: p.barcode, userId, synced: 1, createdAt: new Date().toISOString(),
       }));
       await offlineDB.products.bulkPut(toCache);
-      alert(`Cached ${toCache.length} products for offline!`);
-    }catch{ alert("Cache failed"); }
-  },[]);
+      totalCached += toCache.length;
+      if(pag) hasMore = pag.hasMore; else hasMore = list.length===100;
+      page++; if(page>20) break;
+    }
+    alert(`Cached ${totalCached} products for offline!`);
+  }catch{ alert("Cache failed"); }
+},[]);
 
   const printBill = useCallback(async (cartItems: CartItem[], total: number, customer: string) => {
   const now = new Date();
@@ -131,7 +139,25 @@ export default function SalesPage(){
   const invNo = `INV-${Date.now().toString().slice(-6)}`;
   const itemCount = cartItems.length;
   const rows = cartItems.map(i => `<tr><td>${i.name}</td><td>${i.qty}</td><td>${i.price.toFixed(2)}</td><td>${i.total.toFixed(2)}</td></tr>`).join('');
-  const billHtml = `<html><head><meta charset="utf-8"><style>@page { size: 80mm auto; margin: 0; } body { font-family: 'Courier New', monospace; margin:0; padding:2mm; width: 72mm; font-size: 10px; color: #000; } .center { text-align:center } .store-name { font-size:16px; font-weight:900; margin:0 } .address { font-size:9px; line-height:1.2 } .phones { font-size:9px; font-weight:bold } .divider { border-top:1px solid #000; margin:3px 0 } .info { font-size:9px; line-height:1.3 } table { width:100%; border-collapse:collapse; border: 1.5px solid #000; } th { border: 1px solid #000; padding:3px 2px; font-size:9px; text-align:center; background: #eee; } td { border: 1px solid #000; padding:3px 2px; font-size:9px; text-align:center; } td:first-child { text-align:left; padding-left:4px } .totals { border: 1.5px solid #000; border-top:none; } .totals td { border: 1px solid #000; padding:2px 3px; font-size:10px; text-align:left } .totals td:last-child { text-align:right; font-weight:bold } .footer { text-align:center; font-size:8px; margin-top:4px; border-top:1px solid #000; padding-top:3px }</style></head><body><div class="center"><div class="store-name">Imtiaz General Store</div><div class="address">Main Ghulam Kheel Chowk Parmoli Road<br>Sultan Market Shewa</div><div class="phones">0343-3518722, 0343-8989277, Junaid Khan</div></div><div class="divider"></div><div class="info">Inv no: ${invNo} ${dateStr} ${timeStr}<br><b>${customer.toUpperCase()}</b></div><table><thead><tr><th style="width:46%">Item Description</th><th style="width:12%">Qty</th><th style="width:18%">Rate</th><th style="width:24%">Amount</th></tr></thead><tbody>${rows}</tbody></table><table class="totals"><tr><td style="width:46%">No of Items: ${itemCount}</td><td style="width:30%">Amount:</td><td style="width:24%">${total.toFixed(2)}</td></tr><tr><td>Note</td><td>Discount:</td><td>0.00</td></tr><tr><td></td><td>Recieved:</td><td>${total.toFixed(2)}</td></tr><tr><td></td><td>Balance:</td><td>0.00</td></tr></table><div class="info" style="border:1.5px solid #000; border-top:none; padding:2px 3px">User: JUNAID KHAN</div><div class="footer">Thanks for Business with us<br>Please check your items before leaving counter</div></body></html>`;
+  const billHtml = `<html><head><meta charset="utf-8"><style>
+@page { size: 58mm auto; margin: 0; }
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family: 'Courier New', monospace; margin:0 auto; padding:1mm; width: 54mm; font-size: 9px; color: #000; background:#fff; }
+.center { text-align:center }
+.store-name { font-size:13px; font-weight:900; margin:0; line-height:1.1; }
+.address { font-size:8px; line-height:1.2 }
+.phones { font-size:8px; font-weight:bold }
+.divider { border-top:1px solid #000; margin:3px 0 }
+.info { font-size:8.5px; line-height:1.3; word-wrap:break-word; }
+table { width:100%; border-collapse:collapse; border: 1px solid #000; table-layout:fixed; }
+th { border: 1px solid #000; padding:2px 1px; font-size:8.5px; text-align:center; background: #eee; }
+td { border: 1px solid #000; padding:2px 1px; font-size:8.5px; text-align:center; word-wrap:break-word; overflow:hidden; }
+td:first-child { text-align:left; padding-left:2px }
+.totals { border: 1px solid #000; border-top:none; }
+.totals td { border: 1px solid #000; padding:2px 2px; font-size:9px; text-align:left }
+.totals td:last-child { text-align:right; font-weight:bold }
+.footer { text-align:center; font-size:8px; margin-top:4px; border-top:1px solid #000; padding-top:3px }
+</style></head><body><div class="center"><div class="store-name">Imtiaz General Store</div><div class="address">Main Ghulam Kheel Chowk Parmoli Road<br>Sultan Market Shewa</div><div class="phones">0343-3518722, 0343-8989277, Junaid Khan</div></div><div class="divider"></div><div class="info">Inv no: ${invNo} ${dateStr} ${timeStr}<br><b>${customer.toUpperCase()}</b></div><table><thead><tr><th style="width:40%">Item Description</th><th style="width:14%">Qty</th><th style="width:20%">Rate</th><th style="width:26%">Amount</th></tr></thead><tbody>${rows}</tbody></table><table class="totals"><tr><td style="width:40%">No of Items: ${itemCount}</td><td style="width:34%">Amount:</td><td style="width:26%">${total.toFixed(2)}</td></tr><tr><td>Note</td><td>Discount:</td><td>0.00</td></tr><tr><td></td><td>Recieved:</td><td>${total.toFixed(2)}</td></tr><tr><td></td><td>Balance:</td><td>0.00</td></tr></table><div class="info" style="border:1px solid #000; border-top:none; padding:2px 3px">User: JUNAID KHAN</div><div class="footer">Thanks for Business with us<br>Please check your items before leaving counter</div></body></html>`;
   const old = document.getElementById('imtiaz-print-iframe'); if (old) old.remove();
   const iframe = document.createElement('iframe'); iframe.id = 'imtiaz-print-iframe'; iframe.style.position = 'fixed'; iframe.style.width = '0'; iframe.style.height = '0'; iframe.style.border = '0'; document.body.appendChild(iframe);
   const doc = iframe.contentWindow?.document; if (!doc) return; doc.open(); doc.write(billHtml); doc.close();
