@@ -90,7 +90,7 @@ export default function CustomersPage() {
       <div class="info">${dateStr} ${timeStr}<br>Cust: <b>${customer.toUpperCase().slice(0, is58 ? 22 : 30)}</b></div>
       <table style="margin-top:3px"><tr><td>Total Bill:</td><td>Rs ${Math.round(totalBill)}</td></tr><tr><td>Prev Paid:</td><td>Rs ${Math.round(totalPaid - paidNow)}</td></tr><tr><td>Wusool Now:</td><td>Rs ${Math.round(paidNow)}</td></tr><tr><td>Total Paid:</td><td>Rs ${Math.round(totalPaid)}</td></tr><tr class="total-row"><td>BaQi / Remain:</td><td>Rs ${Math.round(remaining)}</td></tr></table>
       <div class="footer">JUNAID KHAN - Thanks<br>Wusool received ${offlineTag}</div>
-    </body></html>`;
+      </body></html>`;
     const old = document.getElementById('imtiaz-print-iframe'); if (old) old.remove();
     const iframe = document.createElement('iframe'); iframe.id = 'imtiaz-print-iframe'; iframe.style.position = 'fixed'; iframe.style.width = '0'; iframe.style.height = '0'; iframe.style.border = '0'; document.body.appendChild(iframe);
     const doc = iframe.contentWindow?.document; if (!doc) return; doc.open(); doc.write(billHtml); doc.close();
