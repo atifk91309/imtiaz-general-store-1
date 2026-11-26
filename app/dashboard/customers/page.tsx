@@ -63,7 +63,7 @@ export default function CustomersPage() {
     };
   }, []);
 
-  const printWusoolBill = useCallback(async (customer: string, paidNow: number, totalBill: number, totalPaid: number, remaining: number, size: "58mm" | "80mm" = "58mm") => {
+  const printWusoolBill = useCallback(async (customer: string, paidNow: number, totalBill: number, totalPaid: number, remaining: number, size: "58mm" | "80mm" = "80mm") => {
     const now = new Date();
     const dateStr = now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' }).replace(/ /g, '-');
     const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
@@ -73,7 +73,7 @@ export default function CustomersPage() {
     const billHtml = `<html><head><meta charset="utf-8"><style>
       @page { size: ${size} auto; margin: 0; }
       * { margin:0; padding:0; box-sizing:border-box; color:#000 !important; }
-      body { font-family: Arial, sans-serif; margin:0 auto; padding:0; width: ${paperWidth}; font-size: 10px; background:#fff; }
+      body { font-family: Arial, sans-serif; margin:0 auto; padding:0; width: ${paperWidth}; font-size: ${is58 ? "10px" : "12px"}; background:#fff; }
       .center { text-align:center }
       .store-name { font-size:13px; line-height:1.1; font-weight:900; }
       .address { font-size:9px; line-height:1.2; font-weight:900; }
@@ -398,7 +398,7 @@ export default function CustomersPage() {
 
         const newTotalPaid = totalPaidBefore + paidAmt;
         const remaining = cust?.totalUdhar ? cust.totalUdhar - paidAmt : totalBillBefore - newTotalPaid;
-        await printWusoolBill(cust?.name || wusoolName || "Customer", paidAmt, totalBillBefore, newTotalPaid, remaining < 0 ? 0 : remaining, "58mm");
+        await printWusoolBill(cust?.name || wusoolName || "Customer", paidAmt, totalBillBefore, newTotalPaid, remaining < 0 ? 0 : remaining, "80mm");
 
         setCustomers(prev => prev.map(c => {
           if(c._id === wusoolId || c.localId === wusoolId){
@@ -417,7 +417,7 @@ export default function CustomersPage() {
         
         const newTotalPaid = totalPaidBefore + paidAmt;
         const remaining = cust?.totalUdhar ? cust.totalUdhar - paidAmt : totalBillBefore - newTotalPaid;
-        await printWusoolBill(cust?.name || wusoolName || "Customer", paidAmt, totalBillBefore, newTotalPaid, remaining < 0 ? 0 : remaining, "58mm");
+        await printWusoolBill(cust?.name || wusoolName || "Customer", paidAmt, totalBillBefore, newTotalPaid, remaining < 0 ? 0 : remaining, "80mm");
         await reload();
       }
 
@@ -519,7 +519,7 @@ export default function CustomersPage() {
                             <span className="font-bold text-green-700">Rs {fmt(w.amount)}</span>
                             <span className="flex gap-2 items-center">
                               <span className="text-[10px] text-gray-500">{new Date(w.date).toLocaleString()}</span>
-                              <button onClick={()=> printWusoolBill(c.name, w.amount, c.totalBusiness, c.paidAmount||0, c.totalUdhar, "58mm")} className="bg-black text-white px-2 py-0.5 rounded text-[8px]">Print</button>
+                              <button onClick={()=> printWusoolBill(c.name, w.amount, c.totalBusiness, c.paidAmount||0, c.totalUdhar, "80mm")} className="bg-black text-white px-2 py-0.5 rounded text-[8px]">Print</button>
                             </span>
                           </div>))}
                         <div className="flex justify-between font-bold text-[11px] pt-1 border-t"><span>Total Paid: Rs {fmt(c.paidAmount||0)}</span><span className={c.isPaid? "text-green-600" : "text-red-600"}>{c.isPaid? "All Clear - Rs 0" : `Remaining: Rs ${fmt(c.totalUdhar)}`}</span></div></div>
@@ -536,7 +536,7 @@ export default function CustomersPage() {
             <h2 className="font-bold text-[13px] mb-2">Wusool from {wusoolName} - {!isOnline ? "OFFLINE" : "Online"}</h2>
             <p className="text-[10px] text-gray-500 mb-2">#{wusoolId.slice(-6)} • {new Date().toLocaleString()}</p>
             <input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="Amount" className="w-full p-2.5 border rounded-xl mb-3 outline-none text-[13px] focus:ring-2 focus:ring-black"/>
-            <div className="flex gap-2"><button onClick={() => { setWusoolId(null); setWusoolName(null); }} disabled={wusoolLoading} className="flex-1 p-2.5 bg-gray-100 rounded-xl text-[13px]">Cancel</button><button onClick={handleWusool} disabled={wusoolLoading} className="flex-1 p-2.5 bg-black text-white rounded-xl font-bold text-[13px]">{wusoolLoading? "..." : !isOnline ? "Receive Offline + Print" : "Receive + Print 58mm"}</button></div>
+            <div className="flex gap-2"><button onClick={() => { setWusoolId(null); setWusoolName(null); }} disabled={wusoolLoading} className="flex-1 p-2.5 bg-gray-100 rounded-xl text-[13px]">Cancel</button><button onClick={handleWusool} disabled={wusoolLoading} className="flex-1 p-2.5 bg-black text-white rounded-xl font-bold text-[13px]">{wusoolLoading? "..." : !isOnline ? "Receive Offline + Print" : "Receive + Print 80mm"}</button></div>
           </div>
         </div>
       )}

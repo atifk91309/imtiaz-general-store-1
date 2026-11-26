@@ -247,7 +247,10 @@ export default function ProductsPage() {
           setPagination({ page: 1, totalPages: 1, hasMore: false, totalCount: data.length });
         } else {
           if (currentPage === 1) setProducts(data.products);
-          else setProducts((prev) => [...prev, ...data.products]);
+          else setProducts((prev) => {
+            const seen = new Set(prev.map((x) => x._id));
+            return [...prev, ...data.products.filter((x) => !seen.has(x._id))];
+          });
           setPagination(data.pagination);
         }
       } catch (err) {
@@ -462,13 +465,13 @@ export default function ProductsPage() {
       {loading ? <p className="text-center py-10 text-[13px]">Loading...</p> : (
         <>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {products.map((p) => {
+            {products.map((p, pi) => {
               const buy = p.buyPriceAvg || p.buyPrice;
               const profit = p.sellPrice - buy;
               const totalBuy = p.stock * buy;
               const totalSell = p.stock * p.sellPrice;
               return (
-                <div key={p._id} className="bg-white border p-3 rounded-xl shadow-sm">
+                <div key={`${p._id}-${pi}`} className="bg-white border p-3 rounded-xl shadow-sm">
                   <div className="flex justify-between"><p className="font-semibold text-[13px] truncate">{p.name}</p><span className={`text-[10px] px-2 py-0.5 rounded-full ${p.category === "general" ? "bg-green-100 text-green-700" : p.category === "mobile_accessories" ? "bg-blue-100 text-blue-700" : p.category === "manyari" ? "bg-pink-100 text-pink-700" : "bg-gray-100"}`}>{p.category} {p.barcode ? "• 📷" : ""}</span></div>
                   <p className="text-[11px] text-gray-500">{p.company || ""} • Stock: {p.stock} {p.barcode ? `• ${p.barcode}` : ""}</p>
                   <div className="grid grid-cols-3 gap-1 mt-2 text-[10px]">

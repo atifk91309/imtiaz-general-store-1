@@ -59,6 +59,7 @@ export default function SalesPage(){
   const [allSalesProfit, setAllSalesProfit] = useState(0);
   const [isCheckingOut, setIsCheckingOut] = useState(false);
   const [paperSize, setPaperSize] = useState<"58mm" | "80mm">("80mm");
+  const [expandedBills, setExpandedBills] = useState<Set<string>>(new Set());
   const checkoutLockRef = useRef(false);
   const isOnlineHook = useIsOnline();
   const isOffline = mounted && !isOnlineHook;
@@ -223,7 +224,11 @@ filtered.sort((a,b)=>{
           const data=(await res.json()) as ProductApiResponse; let list: Product[] = []; let pag: Pagination | undefined;
           if(Array.isArray(data)){ list = data; } else { list = data.products; pag = data.pagination; }
           if(list.length>0){ const offlineUser = getOfflineUser() as OfflineUser; const userId = offlineUser?._id || offlineUser?.id || "offline"; const toCache: OfflineProduct[] = list.map((p)=>({ _id: p._id, localId: p._id, name: p.name, category: toCat(p.category), company: "", buyPrice: p.buyPriceAvg||p.buyPrice, buyPriceAvg: p.buyPriceAvg||p.buyPrice, sellPrice: p.sellPrice, stock: p.stock, stockMode: p.stockMode, barcode: p.barcode, userId, synced: 1, createdAt: new Date().toISOString(), })); await offlineDB.products.bulkPut(toCache).catch(()=>{}); }
-          if(!cancelled){ const mappedList = list.map((p)=>({ _id:p._id, name:p.name, category:toCat(p.category), buyPrice:p.buyPriceAvg||p.buyPrice||0, buyPriceAvg:p.buyPriceAvg||p.buyPrice||0, sellPrice:p.sellPrice, stock:p.stock, stockMode:p.stockMode, barcode: p.barcode })); if(productPage===1) setProducts(mappedList); else setProducts((prev)=>[...prev, ...mappedList]); if(pag) setProductPagination(pag); }
+          if(!cancelled){ const mappedList = list.map((p)=>({ _id:p._id, name:p.name, category:toCat(p.category), buyPrice:p.buyPriceAvg||p.buyPrice||0, buyPriceAvg:p.buyPriceAvg||p.buyPrice||0, sellPrice:p.sellPrice, stock:p.stock, stockMode:p.stockMode, barcode: p.barcode })); if(productPage===1) setProducts(mappedList);
+          else setProducts((prev)=>{
+            const seen = new Set(prev.map((x)=>x._id));
+            return [...prev, ...mappedList.filter((x)=>!seen.has(x._id))];
+          }); if(pag) setProductPagination(pag); }
         }
       }catch{} finally{ if(!cancelled){ setLoadingProducts(false); setLoadingMoreProducts(false); } }
     }; void load(); return()=>{ cancelled=true; };
@@ -240,15 +245,15 @@ filtered.sort((a,b)=>{
         if(f==="monthly"){ const m=new Date(); m.setMonth(now.getMonth()-1); filtered=filtered.filter((s)=>new Date(s.createdAt)>=m); }
         setAllSalesTotal(filtered.reduce((a,b)=>a+(b.total||0),0));
         setAllSalesProfit(filtered.reduce((a,b)=>a+(b.profit||0),0));
-        const mapped: Sale[]=filtered.slice((p-1)*20,p*20).map((o)=>({ _id:o.localId, productId:o.productId, productName:o.productName, category:toCat(o.category), quantity:o.quantity, sellPrice:o.sellPrice, total:o.total, profit:o.profit, createdAt:o.createdAt, customerName:o.customerName, status:o.status, paymentType:o.paymentType }));
+        const mapped: Sale[]=filtered.slice((p-1)*100, p*100).map((o)=>({ _id:o.localId, productId:o.productId, productName:o.productName, category:toCat(o.category), quantity:o.quantity, sellPrice:o.sellPrice, total:o.total, profit:o.profit, createdAt:o.createdAt, customerName:o.customerName, status:o.status, paymentType:o.paymentType }));
         if(p===1) setSales(mapped); else setSales((prev)=>[...prev,...mapped]);
-        setPagination({page:p,totalPages:Math.ceil(filtered.length/20),hasMore:filtered.length>p*20,totalCount:filtered.length});
+        setPagination({page:p,totalPages:Math.ceil(filtered.length/100),hasMore:filtered.length>p*100,totalCount:filtered.length});
       } else {
         try{
           const resTotal=await fetch(`/api/sales?filter=${f}&page=1&limit=1000`);
           if(resTotal.ok){ const dataTotal=await resTotal.json() as SalesApiResponse; const allList=dataTotal.sales||[]; setAllSalesTotal(allList.reduce((a,b)=>a+(b.total||0),0)); setAllSalesProfit(allList.reduce((a,b)=>a+(b.profit||0),0)); }
         }catch{}
-        const res=await fetch(`/api/sales?filter=${f}&page=${p}&limit=20`);
+        const res=await fetch(`/api/sales?filter=${f}&page=${p}&limit=100`);
         const data=(await res.json()) as SalesApiResponse; const list=data.sales||[];
         if(p===1) setSales(list); else setSales((prev)=>[...prev,...list]);
         setPagination(data.pagination||{page:p,totalPages:1,hasMore:false,totalCount:list.length});
@@ -479,6 +484,58 @@ filtered.sort((a,b)=>{
   const cartTotal=cart.reduce((s,c)=>s+c.total,0);
   const cartProfit=cart.reduce((s,c)=>s+rnd((c.price-c.buyPriceAvg)*c.qty),0);
 
+  // ✅ Bill-wise grouping - Server ka time thora aage-peeche bhi ho to bhi ek hi Bill banega
+const groupedBills = (() => {
+  const sorted = [...sales].sort((a,b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  const groups: Sale[][] = [];
+  for (const s of sorted) {
+    const last = groups[groups.length - 1];
+    const lastSale = last?.[last.length - 1];
+  const diff = lastSale ? Math.abs(new Date(s.createdAt).getTime() - new Date(lastSale.createdAt).getTime()) : 999999;
+  if (last && diff < 15000 && (lastSale.customerName || "Cash") === (s.customerName || "Cash") && lastSale.paymentType === s.paymentType) {
+      last.push(s);
+    } else {
+      groups.push([s]);
+    }
+  }
+  return groups.map((items, idx) => ({
+    id: items[0].createdAt + "_" + idx,
+    time: items[0].createdAt,
+    items,
+    total: items.reduce((a, b) => a + b.total, 0),
+    profit: items.reduce((a, b) => a + b.profit, 0),
+    customer: items[0]?.customerName || "Cash",
+    status: items[0]?.status || "paid",
+    paymentType: items[0]?.paymentType || "cash",
+    billNo: Number(new Date(items[0].createdAt).getTime().toString().slice(-4)),
+  }));
+})();
+
+const toggleBill = (id: string) => {
+  setExpandedBills((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    return next;
+  });
+};
+
+const reprintBill = useCallback((items: Sale[]) => {
+  const cartItems: CartItem[] = items.map((s) => ({
+    cartId: s._id,
+    productId: s.productId,
+    name: s.productName,
+    qty: s.quantity,
+    price: s.sellPrice,
+    total: s.total,
+    category: s.category,
+    buyPrice: 0,
+    buyPriceAvg: 0,
+  }));
+  const total = items.reduce((a, b) => a + b.total, 0);
+  void printBill(cartItems, total, items[0]?.customerName || "Cash");
+}, [printBill]);
+
   const checkout = useCallback(async()=>{
   if(checkoutLockRef.current) return; // Double click block
   if(cart.length===0){ alert("Cart empty"); return; }
@@ -567,13 +624,13 @@ filtered.sort((a,b)=>{
           {loadingProducts? <p className="text-center py-6 text-[12px]">Loading...</p> : (
             <>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {products.map((p)=>{
+              {products.map((p, pi)=>{
                 const raw = qtyMap[p._id]; const qtyDisplay = raw ?? 1; const qtyNum = typeof raw === "number" ? raw : 1;
                 const buy=p.buyPriceAvg||p.buyPrice; const isOutOfStock = p.stockMode==="limited" && p.stock<=0;
                 const cartQty = cart.filter((c)=>c.productId===p._id).reduce((s,c)=>s+c.qty,0);
                 const remaining = p.stockMode==="limited" ? Math.max(0, p.stock - cartQty) : 999; const finalPrice = getFinalPrice(p);
                 return(
-                  <div key={p._id} className={`bg-white border rounded-xl p-3 ${isOutOfStock ? "opacity-70 bg-red-50 border-red-200" : ""}`}>
+                  <div key={`${p._id}-${pi}`} className={`bg-white border rounded-xl p-3 ${isOutOfStock ? "opacity-70 bg-red-50 border-red-200" : ""}`}>
                     <p className="font-bold text-[13px] truncate flex justify-between"><span>{p.name} {isOutOfStock && <span className="text-red-600 text-[10px] ml-1">● OUT</span>}</span><span className="text-[9px] bg-gray-100 px-1.5 rounded">{p.barcode ? `📷 ${p.barcode}` : p.category}</span></p>
                     <p className="text-[11px] text-gray-500">{p.category} • Stock {p.stockMode==="unlimited"?"∞":p.stock} {p.stockMode==="limited" && !isOutOfStock ? `(Left ${remaining})` : ""} • Buy {fmt(buy)}</p>
                     <div className="flex gap-2 mt-2 items-center">
@@ -623,15 +680,40 @@ filtered.sort((a,b)=>{
           </div>
           <div className="bg-white border rounded-xl overflow-hidden">
             <div className="flex gap-1 p-2 border-b bg-gray-50 overflow-x-auto">{(["today","weekly","monthly","all"] as const).map((f)=><button type="button" key={f} onClick={()=>{setFilter(f); setPage(1);}} className={`px-3 py-1 rounded-full text-[10px] font-bold capitalize ${filter===f?"bg-green-600 text-white":"bg-white border"}`}>{f}</button>)}</div>
-            {loadingSales ? <p className="p-4 text-center text-[11px]">Loading sales... {pagination.totalCount} total</p> : <div>{sales.map((s)=>(
-              <div key={s._id} className={`p-2 border-b flex justify-between text-[11px] ${s.status==="pending"?"bg-red-50":""}`}>
-                <div><b>{s.productName}</b> x{s.quantity} @ Rs.{fmt(s.sellPrice)}{s.customerName && s.customerName!=="Walk-in" && s.customerName!=="Cash" ?` 👤${s.customerName}`:""}<div className="text-[9px] text-gray-500">{new Date(s.createdAt).toLocaleTimeString()} • Profit {fmt(s.profit)}</div></div>
-                <div className="text-right flex gap-2 items-center">
-                  <div><div className="font-bold">Rs.{fmt(s.total)}</div><div className={`text-[9px] ${s.status==="pending"?"text-red-600":"text-green-600"}`}>{s.status==="pending"?"UDHAR":"Paid"}</div></div>
-                  <button type="button" onClick={()=> handleReturnSale(s)} className="bg-orange-100 text-orange-700 border border-orange-300 px-2 py-1.5 rounded-lg text-[9px] font-bold hover:bg-orange-600 hover:text-white">↩ Return</button>
+            {loadingSales ? <p className="p-4 text-center text-[11px]">Loading sales... {pagination.totalCount} total</p> : (
+  <div>
+    {groupedBills.map((bill, bIdx) => {
+      const isOpen = expandedBills.has(bill.id) || (bIdx === 0 && expandedBills.size === 0);
+      return (
+        <div key={bill.id} className={`border-b ${bill.status==="pending"?"bg-red-50":""}`}>
+          <div className="p-3 flex justify-between items-start gap-2">
+            <div className="flex-1 cursor-pointer" onClick={() => toggleBill(bill.id)}>
+              <p className="font-bold text-[13px]">Bill #{bill.billNo} • {new Date(bill.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+              <p className="text-[11px] text-slate-500">Profit {fmt(bill.profit)} • {bill.status==="pending"?"UDHAR":"Paid"}{bill.customer!=="Cash" && bill.customer!=="Walk-in" ? ` • 👤${bill.customer}` : ""}</p>
+              <p className="text-[11px] text-slate-600 font-bold mt-0.5">{isOpen ? "▲ Hide Items" : `▼ ${bill.items.length} Items`}</p>
+            </div>
+            <div className="text-right shrink-0">
+              <p className="font-black text-[13px]">Rs {fmt(bill.total)}</p>
+              <button type="button" onClick={() => reprintBill(bill.items)} className="mt-1 bg-slate-900 text-white px-3 py-1.5 rounded-lg text-[11px] font-bold">🖨️ Print</button>
+            </div>
+          </div>
+          {isOpen && (
+            <div className="px-3 pb-3 space-y-1">
+              {bill.items.map((s) => (
+                <div key={s._id} className="flex justify-between items-center text-[12px] bg-slate-50 rounded-lg px-2 py-1.5">
+                  <span className="flex-1 truncate pr-2">• {s.productName} <b>x{s.quantity}</b> — Rs {fmt(s.total)}</span>
+                  <button type="button" onClick={() => handleReturnSale(s)} className="bg-orange-100 text-orange-700 border border-orange-300 px-2 py-1 rounded-md text-[10px] font-bold shrink-0">↩ Return</button>
                 </div>
-              </div>
-            ))}{pagination.hasMore && <button type="button" onClick={()=>setPage((p)=>p+1)} className="w-full py-2 text-[11px] bg-gray-50">Load More Sales - Page {pagination.page}/{pagination.totalPages}</button>}{sales.length===0 && !loadingSales && <p className="p-4 text-center text-[11px] text-gray-400">No sales for {filter}</p>}</div>}
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    })}
+    {groupedBills.length===0 && !loadingSales && <p className="p-4 text-center text-[11px] text-gray-400">No sales for {filter}</p>}
+    {pagination.hasMore && <button type="button" onClick={()=>setPage((p)=>p+1)} className="w-full py-2 text-[11px] bg-gray-50">Load More Sales - Page {pagination.page}/{pagination.totalPages}</button>}
+  </div>
+)}
           </div>
         </div>
       </div>
