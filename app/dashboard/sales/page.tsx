@@ -5,8 +5,7 @@ import type { OfflineSale, OfflineProduct } from "@/lib/offline-db";
 import { getOfflineUser } from "@/lib/offline-auth";
 import { syncAllOffline, syncPendingReturns } from "@/lib/offline-sync";
 
-type BluetoothDevice = { name?: string; gatt?: { connect: () => Promise<void> } };
-type BluetoothNavigator = { bluetooth?: { requestDevice: (options: Record<string, unknown>) => Promise<BluetoothDevice> } };
+ 
 type Category = "mobile_accessories" | "manyari" | "cosmetics" | "other" | "general";
 type Product = { _id: string; name: string; category: Category; buyPrice: number; buyPriceAvg: number; sellPrice: number; stock: number; stockMode: "limited"|"unlimited"; barcode?: string; };
 type Sale = { _id: string; productId: string; productName: string; category: Category; quantity: number; sellPrice: number; total: number; profit: number; createdAt: string; customerName?: string; status?: string; paymentType?: string; };
@@ -51,16 +50,15 @@ export default function SalesPage(){
   const [loadingMoreProducts, setLoadingMoreProducts] = useState(false);
   const [loadingSales, setLoadingSales] = useState(true);
   const [categoryFilter, setCategoryFilter] = useState("all");
-  const [customerName, setCustomerName] = useState("Walk-in");
+  const [customerName, setCustomerName] = useState("Cash");
   const [paymentType, setPaymentType] = useState<"cash"|"credit">("cash");
   const [pendingCount, setPendingCount] = useState(0);
   const [mounted, setMounted] = useState(false);
-  const [customerError, setCustomerError] = useState(false);
-  const [printerName, setPrinterName] = useState("");
-  const [printerConnected, setPrinterConnected] = useState(false);
+  const [customerError, setCustomerError] = useState(false); 
   const [allSalesTotal, setAllSalesTotal] = useState(0);
   const [allSalesProfit, setAllSalesProfit] = useState(0);
   const [isCheckingOut, setIsCheckingOut] = useState(false);
+  const [paperSize, setPaperSize] = useState<"58mm" | "80mm">("80mm");
   const checkoutLockRef = useRef(false);
   const isOnlineHook = useIsOnline();
   const isOffline = mounted && !isOnlineHook;
@@ -132,46 +130,63 @@ export default function SalesPage(){
   }catch{ alert("Cache failed"); }
 },[]);
 
-  const printBill = useCallback(async (cartItems: CartItem[], total: number, customer: string) => {
+// Page khulte hi purani setting wapis lao
+useEffect(() => {
+  const saved = localStorage.getItem("imtiaz-paper-size");
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  if (saved === "80mm" || saved === "58mm") setPaperSize(saved);
+}, []);
+
+const changePaper = (s: "58mm" | "80mm") => {
+  setPaperSize(s);
+  localStorage.setItem("imtiaz-paper-size", s);
+};
+
+  const printBill = useCallback(async (cartItems: CartItem[], total: number, customer: string, sizeOverride?: "58mm" | "80mm") => {
+  const size = sizeOverride || paperSize;
+  const is58 = size === "58mm";
+
+  // 58mm -> 54mm printable, 80mm -> 72mm printable
+  const pageW = is58 ? "58mm" : "80mm";
+  const bodyW = is58 ? "54mm" : "72mm";
+  const baseFont = is58 ? "10px" : "12px";
+  const headFont = is58 ? "13px" : "16px";
+  const smallFont = is58 ? "9px" : "11px";
+
   const now = new Date();
   const dateStr = now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' }).replace(/ /g, '-');
   const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
   const invNo = `INV-${Date.now().toString().slice(-6)}`;
   const itemCount = cartItems.reduce((s, i) => s + i.qty, 0);
   const rows = cartItems.map(i => `<tr><td>${i.name}</td><td>${i.qty}</td><td>${Math.round(i.price)}</td><td>${Math.round(i.total)}</td></tr>`).join('');
+
   const billHtml = `<html><head><meta charset="utf-8"><style>
-@page { size: 58mm auto; margin: 0; }
+@page { size: ${pageW} auto; margin: 0; }
 * { margin:0; padding:0; box-sizing:border-box; color:#000 !important; }
-body { font-family: Arial, sans-serif; margin:0 auto; padding:0; width: 48mm; font-size: 10px; background:#fff; }
+body { font-family: Arial, sans-serif; margin:0 auto; padding:0; width: ${bodyW}; font-size: ${baseFont}; background:#fff; }
 .center { text-align:center }
-.store-name { font-size:13px; line-height:1.1; font-weight:900; }
-.address { font-size:9px; line-height:1.2; font-weight:900; }
-.phones { font-size:9px; font-weight:900; }
+.store-name { font-size:${headFont}; line-height:1.1; font-weight:900; }
+.address { font-size:${smallFont}; line-height:1.2; font-weight:900; }
+.phones { font-size:${smallFont}; font-weight:900; }
 .divider { border-top:1px solid #000; margin:3px 0 }
-.info { font-size:9px; line-height:1.3; word-wrap:break-word; font-weight:700; }
+.info { font-size:${smallFont}; line-height:1.3; word-wrap:break-word; font-weight:700; }
 table { width:100%; border-collapse:collapse; border: 1px solid #000; table-layout:fixed; }
-th { border: 1px solid #000; padding:2px 1px; font-size:9px; text-align:center; background:#fff !important; font-weight:900; }
-td { border: 1px solid #000; padding:2px 1px; font-size:9px; text-align:center; font-family:'Courier New', monospace; font-weight:700; white-space:nowrap; }
-td:first-child { text-align:left; padding-left:2px; font-family:Arial, sans-serif; white-space:normal; }
+th { border: 1px solid #000; padding:2px 1px; font-size:${smallFont}; text-align:center; background:#fff !important; font-weight:900; }
+td { border: 1px solid #000; padding:2px 1px; font-size:${smallFont}; text-align:center; font-family:'Courier New', monospace; font-weight:700; }
+td:first-child { text-align:left; padding-left:2px; font-family:Arial, sans-serif; white-space:normal; word-break:break-word; }
 .totals { border: 1px solid #000; border-top:none; }
-.totals td { border: 1px solid #000; padding:2px 2px; font-size:9.5px; text-align:left; font-family:Arial, sans-serif; font-weight:900; white-space:normal; }
+.totals td { border: 1px solid #000; padding:2px 2px; font-size:10px; text-align:left; font-family:Arial, sans-serif; font-weight:900; white-space:normal; }
 .totals td:last-child { text-align:right; }
-.footer { text-align:center; font-size:9px; margin-top:4px; border-top:1px solid #000; padding-top:3px; font-weight:900; }
+.footer { text-align:center; font-size:${smallFont}; margin-top:4px; border-top:1px solid #000; padding-top:3px; font-weight:900; }
 </style></head><body><div class="center"><div class="store-name">Imtiaz General Store</div><div class="address">Main Ghulam Kheel Chowk Parmoli Road<br>Sultan Market Shewa</div><div class="phones">0343-3518722, 0343-8989277, Junaid Khan</div></div><div class="divider"></div><div class="info">Inv no: ${invNo} ${dateStr} ${timeStr}<br><b>${customer.toUpperCase()}</b></div><table><thead><tr><th style="width:38%">Item Description</th><th style="width:12%">Qty</th><th style="width:22%">Rate</th><th style="width:28%">Amount</th></tr></thead><tbody>${rows}</tbody></table><table class="totals"><tr><td style="width:38%">Items: ${itemCount}</td><td style="width:34%">Amount:</td><td style="width:28%">${Math.round(total)}</td></tr><tr><td></td><td>Recieved:</td><td>${Math.round(total)}</td></tr></table><div class="info" style="border:1px solid #000; border-top:none; padding:2px 3px">User: JUNAID KHAN</div><div class="footer">Thanks for Business with us<br>Please check your items before leaving counter</div></body></html>`;
+
   const old = document.getElementById('imtiaz-print-iframe'); if (old) old.remove();
   const iframe = document.createElement('iframe'); iframe.id = 'imtiaz-print-iframe'; iframe.style.position = 'fixed'; iframe.style.width = '0'; iframe.style.height = '0'; iframe.style.border = '0'; document.body.appendChild(iframe);
   const doc = iframe.contentWindow?.document; if (!doc) return; doc.open(); doc.write(billHtml); doc.close();
   setTimeout(()=>{ iframe.contentWindow?.print(); }, 400); setTimeout(()=>{ iframe.remove(); }, 8000);
-}, []);
+}, [paperSize]);
 
-  const connectPrinter = useCallback(async () => {
-    try {
-      const nav = window.navigator as unknown as BluetoothNavigator;
-      if (!nav.bluetooth) { alert("Bluetooth not supported. Use Chrome on Android."); return; }
-      const device = await nav.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: ['battery_service', '000018f0-0000-1000-8000-00805f9b34fb', '49535343-fe7d-4ae5-8fa9-9fafd205e455', '0000ff00-0000-1000-8000-00805f9b34fb'] });
-      await device.gatt?.connect(); setPrinterName(device.name || "Thermal Printer"); setPrinterConnected(true); alert(`✅ Connected: ${device.name || "Thermal Printer"}`);
-    } catch (err: unknown) { const msg = err instanceof Error ? err.message : ""; if (msg.includes("User cancelled")) return; alert("Printer connect failed. Pair first in Bluetooth settings."); }
-  }, []);
+   
 
   useEffect(()=>{
     let cancelled=false;
@@ -264,7 +279,7 @@ filtered.sort((a,b)=>{
   const addToCart=useCallback((p:Product, qty=1)=>{
     const finalPrice = getFinalPrice(p); if (finalPrice <= 0) { alert("Enter Sell Price first!"); return; }
     if(p.stockMode==="limited" && p.stock<=0){ alert(`Out of stock: ${p.name}`); return; }
-    if(paymentType==="credit"){ const name=customerName.trim(); if(name.length<2 || name.toLowerCase()==="walk-in"){ setCustomerError(true); alert("Customer name required for Udhar!"); customerInputRef.current?.focus(); return; } }
+    if(paymentType==="credit"){ const name=customerName.trim(); if(name.length<2 || name.toLowerCase()==="walk-in" || name.toLowerCase()==="cash"){ setCustomerError(true); alert("Customer name required for Udhar!"); customerInputRef.current?.focus(); return; } }
     const safeQty = Number.isNaN(qty) || qty<=0 ? 1 : rnd(qty);
     setCart((prev)=>{
       const totalQtyInCart = prev.filter((c)=>c.productId===p._id).reduce((s,c)=>s+c.qty,0);
@@ -469,7 +484,7 @@ filtered.sort((a,b)=>{
   if(cart.length===0){ alert("Cart empty"); return; }
   if(paymentType==="credit"){ 
     const name=customerName.trim(); 
-    if(name.length<2 || name.toLowerCase()==="walk-in"){ 
+    if(name.length<2 || name.toLowerCase()==="walk-in" || name.toLowerCase()==="cash"){ 
       setCustomerError(true); 
       alert("Customer name required for Udhar!"); 
       customerInputRef.current?.focus(); 
@@ -481,7 +496,7 @@ filtered.sort((a,b)=>{
   setIsCheckingOut(true);
 
   try {
-    const finalCustomer=customerName.trim()||"Walk-in"; 
+    const finalCustomer = customerName.trim() || "Cash";
     const copy=[...cart]; 
     const now=new Date().toISOString();
     setCart([]); // Cart foran khali karo, taake dobara sell na ho
@@ -509,12 +524,16 @@ filtered.sort((a,b)=>{
   return(
     <div id="pos-main-page" tabIndex={-1} className="min-h-screen bg-gray-50 p-2 sm:p-4 max-w-7xl mx-auto outline-none">
       <div className="flex flex-wrap justify-between gap-2 mb-3">
-        <h1 className="font-bold text-[18px]">🛒 Imtiaz General Store - POS {isOffline?"📶 Offline":""} {printerConnected?`🖨️ ${printerName}`:""}</h1>
+        <h1 className="font-bold text-[18px]">🛒 Imtiaz General Store - POS {isOffline?"📶 Offline":""}</h1>
         <div className="flex gap-2">
-          <button onClick={connectPrinter} className={`px-3 py-1 rounded-full text-[11px] font-bold ${printerConnected?"bg-green-600 text-white":"bg-blue-600 text-white"}`}>{printerConnected?`🖨️ ${printerName}`:"🖨️ Connect BT Printer"}</button>
+           
           <span className="bg-green-600 text-white px-3 py-1 rounded-full text-[11px]">Sale Rs.{fmt(allSalesTotal)}</span>
           <span className="bg-blue-600 text-white px-3 py-1 rounded-full text-[11px]">Profit Rs.{fmt(allSalesProfit)}</span>
           {pendingCount>0 && <span className="bg-amber-500 text-white px-3 py-1 rounded-full text-[11px]">{pendingCount} pending</span>}
+          <div className="flex gap-1 bg-gray-100 p-1 rounded-full items-center">
+          <button onClick={() => changePaper("58mm")} className={`flex-1 py-1 rounded-md text-[10px] font-bold ${paperSize === "58mm" ? "bg-black text-white" : "text-gray-600"}`}>🧾 58mm</button>
+          <button onClick={() => changePaper("80mm")} className={`flex-1 py-1 rounded-md text-[10px] font-bold ${paperSize === "80mm" ? "bg-black text-white" : "text-gray-600"}`}>🧾 80mm</button>
+        </div>
         </div>
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
@@ -583,7 +602,7 @@ filtered.sort((a,b)=>{
         </div>
         <div className="space-y-3">
           <div className="bg-white border rounded-xl p-3 sticky top-2">
-            <div className="flex justify-between items-center mb-2"><p className="font-bold text-[13px]">🛒 Cart ({cart.length}) - Rs.{fmt(cartTotal)}</p><div className="flex gap-1"><button onClick={connectPrinter} className="text-[10px] bg-blue-50 text-blue-700 border border-blue-200 px-2 py-1 rounded-lg font-bold">{printerConnected?"🖨️ Connected":"🖨️ BT"}</button><button onClick={()=>{ if(cart.length>0) void printBill(cart, cartTotal, customerName); }} className="text-[10px] bg-black text-white px-2 py-1 rounded-lg font-bold">Print</button></div></div>
+            <div className="flex justify-between items-center mb-2"><p className="font-bold text-[13px]">🛒 Cart ({cart.length}) - Rs.{fmt(cartTotal)}</p><div className="flex gap-1"><button onClick={()=>{ if(cart.length>0) void printBill(cart, cartTotal, customerName); }} className="text-[10px] bg-black text-white px-2 py-1 rounded-lg font-bold">Print</button></div></div>
             <div className="space-y-1 max-h-60 overflow-y-auto mb-3">{cart.length===0? <p className="text-[11px] text-gray-400 text-center py-4">Scan barcode to add - Fast billing</p> : cart.map((c)=>(
               <div key={c.cartId} className="flex justify-between items-center text-[11px] border-b py-1.5">
                 <span className="flex-1 truncate pr-2">{c.name} x{c.qty} @ {fmt(c.price)}</span>
@@ -596,7 +615,7 @@ filtered.sort((a,b)=>{
             ))}</div>
             <input ref={customerInputRef} value={customerName} onChange={(e)=>{ setCustomerName(e.target.value); if(e.target.value.trim().length>=2) setCustomerError(false); }} placeholder="Customer name for Udhar" className={`w-full border p-2 rounded-lg text-[12px] mb-2 ${customerError ? "border-red-500 bg-red-50 ring-2 ring-red-300" : ""}`} />
             {customerError && <p className="text-[10px] text-red-600 mb-2 font-bold">* Customer name required for Udhar</p>}
-            <div className="flex bg-gray-100 rounded-lg p-1 mb-3"><button type="button" onClick={()=>{ setPaymentType("cash"); setCustomerError(false); }} className={`flex-1 py-1.5 rounded-md text-[11px] font-bold ${paymentType==="cash"?"bg-green-600 text-white":"text-gray-600"}`}>Cash</button><button type="button" onClick={()=>{ const name=customerName.trim(); if(name.length<2 || name.toLowerCase()==="walk-in"){ setCustomerError(true); alert("Customer name required!"); customerInputRef.current?.focus(); return; } setCustomerError(false); setPaymentType("credit"); }} className={`flex-1 py-1.5 rounded-md text-[11px] font-bold ${paymentType==="credit"?"bg-red-600 text-white":"text-gray-600"}`}>Udhar</button></div>
+            <div className="flex bg-gray-100 rounded-lg p-1 mb-3"><button type="button" onClick={()=>{ setPaymentType("cash"); setCustomerError(false); }} className={`flex-1 py-1.5 rounded-md text-[11px] font-bold ${paymentType==="cash"?"bg-green-600 text-white":"text-gray-600"}`}>Cash</button><button type="button" onClick={()=>{ const name=customerName.trim(); if(name.length<2 || name.toLowerCase()==="walk-in" || name.toLowerCase()==="cash"){ setCustomerError(true); alert("Customer name required!"); customerInputRef.current?.focus(); return; } setCustomerError(false); setPaymentType("credit"); }} className={`flex-1 py-1.5 rounded-md text-[11px] font-bold ${paymentType==="credit"?"bg-red-600 text-white":"text-gray-600"}`}>Udhar</button></div>
             <button type="button" onClick={()=>{ void checkout(); }} disabled={cart.length===0 || isCheckingOut} className="w-full bg-black text-white py-2.5 rounded-xl font-bold text-[13px] disabled:bg-gray-300">
             {isCheckingOut ? "⏳ Selling... Please Wait" : paymentType==="credit" ? `Udhar Rs.${fmt(cartTotal)} + Print` : `Sell Rs.${fmt(cartTotal)} • Profit ${fmt(cartProfit)} + Print`}
           </button>
@@ -606,7 +625,7 @@ filtered.sort((a,b)=>{
             <div className="flex gap-1 p-2 border-b bg-gray-50 overflow-x-auto">{(["today","weekly","monthly","all"] as const).map((f)=><button type="button" key={f} onClick={()=>{setFilter(f); setPage(1);}} className={`px-3 py-1 rounded-full text-[10px] font-bold capitalize ${filter===f?"bg-green-600 text-white":"bg-white border"}`}>{f}</button>)}</div>
             {loadingSales ? <p className="p-4 text-center text-[11px]">Loading sales... {pagination.totalCount} total</p> : <div>{sales.map((s)=>(
               <div key={s._id} className={`p-2 border-b flex justify-between text-[11px] ${s.status==="pending"?"bg-red-50":""}`}>
-                <div><b>{s.productName}</b> x{s.quantity} @ Rs.{fmt(s.sellPrice)}{s.customerName && s.customerName!=="Walk-in"?` 👤${s.customerName}`:""}<div className="text-[9px] text-gray-500">{new Date(s.createdAt).toLocaleTimeString()} • Profit {fmt(s.profit)}</div></div>
+                <div><b>{s.productName}</b> x{s.quantity} @ Rs.{fmt(s.sellPrice)}{s.customerName && s.customerName!=="Walk-in" && s.customerName!=="Cash" ?` 👤${s.customerName}`:""}<div className="text-[9px] text-gray-500">{new Date(s.createdAt).toLocaleTimeString()} • Profit {fmt(s.profit)}</div></div>
                 <div className="text-right flex gap-2 items-center">
                   <div><div className="font-bold">Rs.{fmt(s.total)}</div><div className={`text-[9px] ${s.status==="pending"?"text-red-600":"text-green-600"}`}>{s.status==="pending"?"UDHAR":"Paid"}</div></div>
                   <button type="button" onClick={()=> handleReturnSale(s)} className="bg-orange-100 text-orange-700 border border-orange-300 px-2 py-1.5 rounded-lg text-[9px] font-bold hover:bg-orange-600 hover:text-white">↩ Return</button>
